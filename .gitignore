@@ -1,0 +1,79 @@
+# ============================================
+# AuditCore - Cross-Platform .gitignore
+# ============================================
+# 跨平台生命线：确保 Windows/macOS/Linux 同步无冲突
+# ============================================
+
+# --------------------------------------------
+# 1. 操作系统特有文件
+# --------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+.fuse_hidden*
+
+# --------------------------------------------
+# 2. Python 运行时
+# --------------------------------------------
+# 字节码缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# pytest
+.pytest_cache/
+
+# 虚拟环境（各平台路径差异大）
+venv/
+env/
+.conda/
+.venv/
+ENV/
+
+# 分发/打包
+*.egg-info/
+*.egg
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --------------------------------------------
+# 3. C++ 编译产物（为 engine_cpp 目录预留）
+# --------------------------------------------
+# 构建目录
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# 对象文件（平台差异）
+*.o          # Linux/macOS
+*.obj        # Windows
+
+# 动态库/共享库
+*.so         # Linux
+*.dylib      # macOS
+*.dll        # Windows
+
+# 静态库
+*.a          # Linux/macOS
+*.lib        # Windows
+
+# 可执行文件（预留）
+*.exe
