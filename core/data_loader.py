@@ -37,13 +37,16 @@ class AuditDataLoader:
     @staticmethod
     def basic_scan(df: pd.DataFrame) -> dict:
         """
-        执行基础审计扫描，检测负金额和完全重复行。
+        执行基础审计扫描，检测负金额和完全重复行，
+        同时计算关键统计指标。
 
         Args:
             df: 原始审计数据。
 
         Returns:
-            异常分类字典，键为异常类型名称，值为对应的异常行 DataFrame。
+            包含两个键的字典：
+                - "anomalies": 异常分类字典，键为异常类型名称，值为对应的异常行 DataFrame。
+                - "stats": 统计指标字典，包含 total_records、anomaly_count、max_amount。
         """
         anomalies = {}
 
@@ -56,4 +59,15 @@ class AuditDataLoader:
         duplicate_mask = df.duplicated(keep="first")
         anomalies["Duplicate Rows"] = df[duplicate_mask].copy()
 
-        return anomalies
+        # 计算统计指标
+        anomaly_count = sum(len(a) for a in anomalies.values())
+        max_amount = float(df["Amount"].max()) if "Amount" in df.columns else None
+
+        return {
+            "anomalies": anomalies,
+            "stats": {
+                "total_records": len(df),
+                "anomaly_count": anomaly_count,
+                "max_amount": max_amount,
+            },
+        }

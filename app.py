@@ -7,6 +7,7 @@ import platform
 import streamlit as st
 from core.utils import get_project_root, get_mock_data_path
 from core.data_loader import AuditDataLoader
+from agents.auditor_agent import JuniorAuditorAgent
 
 st.set_page_config(page_title="AuditCore", page_icon=":clipboard:", layout="wide")
 
@@ -35,7 +36,8 @@ uploaded_file = st.file_uploader("Upload audit file (.xlsx)", type=["xlsx"])
 if uploaded_file is not None:
     if st.session_state.get("file_name") != uploaded_file.name:
         st.session_state.pop("df", None)
-        st.session_state.pop("scan_done", None)
+        st.session_state.pop("scan_result", None)
+        st.session_state.pop("agent_report", None)
         st.session_state["file_name"] = uploaded_file.name
 
 # 成功加载的 DataFrame 持久化到 session_state，
@@ -53,9 +55,10 @@ if "df" not in st.session_state and uploaded_file is not None:
 if st.session_state.get("df") is not None:
     df = st.session_state["df"]
 
-    # 数据概览
-    st.success(f"File loaded: {uploaded_file.name if uploaded_file is not None else st.session_state.get('file_name')} — {len(df)} rows")
+    file_label = uploaded_file.name if uploaded_file is not None else st.session_state.get("file_name")
+    st.success(f"File loaded: {file_label} — {len(df)} rows")
 
+    # 数据概览
     st.subheader("Data Preview")
     st.write(f"Total rows: {len(df)}")
     st.dataframe(df.head(5))
@@ -64,14 +67,50 @@ if st.session_state.get("df") is not None:
     st.subheader("Preliminary Scan")
     if st.button("Run Preliminary Scan"):
         loader = AuditDataLoader()
-        anomalies = loader.basic_scan(df)
+        result = loader.basic_scan(df)
+        st.session_state["scan_result"] = result
+        st.session_state.pop("agent_report", None)
 
+    # 读取扫描结果，无论当前是按钮点击还是页面重运行
+    if st.session_state.get("scan_result") is not None:
+        result = st.session_state["scan_result"]
+        anomalies = result["anomalies"]
+        stats = result["stats"]
+
+        # 仪表盘指标展示
+        cols = st.columns(3)
+        with cols[0]:
+            st.metric(label="Total Records", value=stats["total_records"])
+        with cols[1]:
+            st.metric(label="Anomalies Detected", value=stats["anomaly_count"])
+        with cols[2]:
+            if stats["max_amount"] is not None:
+                st.metric(label="Max Amount", value=f"{stats['max_amount']:,.2f}")
+            else:
+                st.metric(label="Max Amount", value="N/A")
+
+        # 异常详情折叠面板
         found_any = False
         for label, anomaly_df in anomalies.items():
             if not anomaly_df.empty:
                 found_any = True
-                st.error(f"**{label}**: {len(anomaly_df)} record(s) detected")
-                st.dataframe(anomaly_df)
+                with st.expander(f"View Anomaly Details — {label} ({len(anomaly_df)} record(s))", expanded=True):
+                    st.error(f"{label}: {len(anomaly_df)} record(s) detected")
+                    st.dataframe(anomaly_df)
 
         if not found_any:
             st.success("No anomalies found in preliminary scan.")
+
+        # AI Agent 审计意见模块
+        st.subheader("AI Agent's Preliminary Opinion")
+
+        if st.button("Generate AI Report"):
+            # 调用 Agent 引擎，异常数据从 scan_result 中流转至 Agent
+            with st.spinner("Agent is analyzing..."):
+                agent = JuniorAuditorAgent()
+                report = agent.generate_report(anomalies, stats)
+                st.session_state["agent_report"] = report
+
+        # 展示 Agent 报告，页面重运行时从 session_state 恢复
+        if st.session_state.get("agent_report") is not None:
+            st.info(st.session_state["agent_report"])
