@@ -107,10 +107,17 @@ if st.session_state.get("df") is not None:
         if st.button("Generate AI Report"):
             # 调用 Agent 引擎，异常数据从 scan_result 中流转至 Agent
             with st.spinner("Agent is analyzing..."):
-                agent = JuniorAuditorAgent()
-                report = agent.generate_report(anomalies, stats)
-                st.session_state["agent_report"] = report
+                try:
+                    agent = JuniorAuditorAgent()
+                    report = agent.generate_report(anomalies, stats)
+                    st.session_state["agent_report"] = report
+                except Exception as e:
+                    st.session_state["agent_report"] = f"[Error] {e}"
 
         # 展示 Agent 报告，页面重运行时从 session_state 恢复
         if st.session_state.get("agent_report") is not None:
-            st.info(st.session_state["agent_report"])
+            report_text = st.session_state["agent_report"]
+            if report_text.startswith("[Error]"):
+                st.error(report_text)
+            else:
+                st.info(report_text)

@@ -4,11 +4,13 @@
 """
 
 import os
-import pandas as pd
+from pathlib import Path
 
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    # 显式指定 .env 路径，基于项目根目录，避免工作目录不确定导致加载失败
+    _env_path = Path(__file__).resolve().parent.parent / ".env"
+    load_dotenv(dotenv_path=_env_path, override=True)
 except ImportError:
     pass
 
@@ -21,32 +23,30 @@ class JuniorAuditorAgent:
     def __init__(self):
         """
         初始化 LLM 客户端。
-
-        从环境变量读取 OPENAI_API_KEY 和 OPENAI_API_BASE（可选，用于兼容 Groq 等）。
-        如果未配置 API Key，仅打印警告，不抛出异常，后续调用会返回模拟结果。
+        逻辑：优先读取环境变量，如果读取失败，绝对强制回退到本地 Ollama 配置。
         """
-        self.api_key = os.environ.get("OPENAI_API_KEY")
-        self.api_base = os.environ.get("OPENAI_API_BASE")
+        # 强制兜底：即便没有 .env 文件，也绝不连外网
+        self.api_key = os.environ.get("OPENAI_API_KEY", "ollama_local")
+        self.api_base = os.environ.get("OPENAI_BASE_URL", "http://localhost:11434/v1")
+        self.model = os.environ.get("LLM_MODEL", "llama3:8b")
 
-        if not self.api_key:
-            print("[WARNING] OPENAI_API_KEY not set. Agent will run in Mock Mode.")
-            self.client = None
-        else:
-            kwargs = {"api_key": self.api_key}
-            if self.api_base:
-                kwargs["base_url"] = self.api_base
-            self.client = OpenAI(**kwargs)
+        print("-" * 40)
+        print(f"[Agent 诊断] API Key: {self.api_key}")
+        print(f"[Agent 诊断] 目标接口: {self.api_base}")
+        print(f"[Agent 诊断] 使用模型: {self.model}")
+        print("-" * 40)
+
+        # 实例化客户端，严格锁死目标地址
+        self.client = OpenAI(
+            api_key=self.api_key, 
+            base_url=self.api_base
+        )
 
     @staticmethod
     def _format_anomalies(anomalies_dict: dict) -> str:
         """
-        将异常数据字典转换为纯文本摘要，供 LLM 理解。
-
-        Args:
-            anomalies_dict: 键为异常类型名称，值为异常行 DataFrame。
-
-        Returns:
-            格式化后的文本摘要。
+        数据流转逻辑：将 Pandas 抓出的异常 DataFrame 字典，
+        降维转换成简单的纯文本格式，方便丢给大模型阅读。
         """
         lines = []
         for label, df in anomalies_dict.items():
@@ -60,14 +60,7 @@ class JuniorAuditorAgent:
 
     def generate_report(self, anomalies_dict: dict, stats: dict) -> str:
         """
-        调用 LLM 生成审计报告。如果 API 不可用则返回模拟文本。
-
-        Args:
-            anomalies_dict: 异常分类字典，由 basic_scan 返回的 "anomalies" 键提供。
-            stats: 统计指标字典，由 basic_scan 返回的 "stats" 键提供。
-
-        Returns:
-            LLM 生成的审计报告文本，或模拟文本。
+        业务逻辑：组装 Prompt，向大模型发送请求并接收审计报告。
         """
         anomaly_text = self._format_anomalies(anomalies_dict)
         total_records = stats.get("total_records", "N/A")
@@ -87,13 +80,11 @@ class JuniorAuditorAgent:
             "Please provide your preliminary audit opinion."
         )
 
-        # 无 API Key 或调用失败时，返回模拟报告
-        if self.client is None:
-            return self._mock_report(anomaly_count, anomalies_dict)
+        print(f"[Agent] 正在向本地模型 '{self.model}' 发送请求，请观察风扇转速...")
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=self.model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
@@ -101,32 +92,8 @@ class JuniorAuditorAgent:
                 temperature=0.3,
                 max_tokens=1024,
             )
+            print("[Agent] 报告生成成功！")
             return response.choices[0].message.content
         except Exception as e:
-            print(f"[ERROR] LLM API call failed: {e}")
-            return self._mock_report(anomaly_count, anomalies_dict)
-
-    @staticmethod
-    def _mock_report(anomaly_count: int, anomalies_dict: dict) -> str:
-        """
-        生成模拟审计报告（占位符，用于无 API Key 时的演示）。
-
-        Args:
-            anomaly_count: 异常总数。
-            anomalies_dict: 异常分类字典，用于列出具体异常类型。
-
-        Returns:
-            带 [Mock Mode] 前缀的模拟审计文本。
-        """
-        anomaly_types = ", ".join(
-            label for label, df in anomalies_dict.items() if not df.empty
-        ) or "none"
-
-        return (
-            "[Mock Mode] LLM is not configured. This is a simulated audit report.\n\n"
-            f"The preliminary scan flagged {anomaly_count} anomaly/anomalies across "
-            f"the following categories: {anomaly_types}.\n\n"
-            "Recommendation: Assign the Challenger Agent to cross-verify these entries "
-            "with original receipts and ledger records. Once the OPENAI_API_KEY is configured, "
-            "a real AI-generated analysis will replace this message."
-        )
+            # 如果本地 Ollama 没开，会在这里被精准捕获并抛出
+            raise RuntimeError(f"LLM API call failed (请确认终端已运行 ollama run llama3:8b): {e}")
