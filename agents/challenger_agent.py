@@ -1,6 +1,6 @@
 """
-初级审计 Agent 引擎。
-调用兼容 OpenAI 标准的大模型 API，对异常数据生成分析报告。
+反方审计 Agent 引擎。
+复用本地 Llama3:8b 模型，以反方视角对初级审计结果进行复核，降低误报率。
 """
 
 import os
@@ -17,8 +17,12 @@ except ImportError:
 from openai import OpenAI
 
 
-class JuniorAuditorAgent:
-    """初级审计 Agent，负责将异常数据交由 LLM 生成审计意见。"""
+class ChallengerAgent:
+    """
+    反方审计 Agent。
+    扮演怀疑态度的高级审计合伙人，对初级审计员发现的异常数据
+    提出良性解释，旨在降低误报率。
+    """
 
     def __init__(self):
         """
@@ -31,14 +35,14 @@ class JuniorAuditorAgent:
         self.model = os.environ.get("LLM_MODEL", "llama3:8b")
 
         print("-" * 40)
-        print(f"[Agent 诊断] API Key: {self.api_key}")
-        print(f"[Agent 诊断] 目标接口: {self.api_base}")
-        print(f"[Agent 诊断] 使用模型: {self.model}")
+        print(f"[Challenger Agent 诊断] API Key: {self.api_key}")
+        print(f"[Challenger Agent 诊断] 目标接口: {self.api_base}")
+        print(f"[Challenger Agent 诊断] 使用模型: {self.model}")
         print("-" * 40)
 
         # 实例化客户端，严格锁死目标地址
         self.client = OpenAI(
-            api_key=self.api_key, 
+            api_key=self.api_key,
             base_url=self.api_base
         )
 
@@ -58,32 +62,33 @@ class JuniorAuditorAgent:
 
         return "\n".join(lines) if lines else "No anomalies found."
 
-    def generate_report(self, anomalies_dict: dict, stats: dict) -> str:
+    def generate_review(self, total_records: int, anomaly_text: str, junior_report: str) -> str:
         """
-        业务逻辑：组装 Prompt，向大模型发送请求并接收审计报告。
+        核心逻辑：接收总记录数、异常数据文本、初级审计员报告，
+        生成反方复核意见。
         """
-        anomaly_text = self._format_anomalies(anomalies_dict)
-        total_records = stats.get("total_records", "N/A")
-        anomaly_count = stats.get("anomaly_count", "N/A")
-
         system_prompt = (
-            "You are a meticulous financial auditor. Your role is to review "
-            "anomalies detected in a preliminary rule-based scan of accounting records. "
+            "You are a skeptical Senior Audit Partner. Your job is to review the anomalies "
+            "found by the Junior Auditor. You must actively look for benign, normal business "
+            "explanations for these anomalies (e.g., negative amounts could be refunds or "
+            "voided transactions). Your goal is to reduce false positives.\n"
             "You MUST respond with a single, valid JSON object ONLY, with no markdown "
             "formatting or surrounding text. The JSON must contain exactly two keys:\n"
-            '- "analysis": a concise, professional summary of the findings (string),\n'
-            '- "risk_score": an integer from 0 to 100, where higher means greater fraud risk.\n'
-            "Example: {\"analysis\": \"...\", \"risk_score\": 75}"
+            '- "rebuttal": your independent review and potential false positive analysis (string),\n'
+            '- "adjusted_risk_score": an integer from 0 to 100, the adjusted risk score after your review.\n'
+            "Example: {\"rebuttal\": \"...\", \"adjusted_risk_score\": 30}"
         )
 
         user_prompt = (
-            f"Total records scanned: {total_records}\n"
-            f"Total anomalies detected: {anomaly_count}\n\n"
-            f"Anomaly details:\n{anomaly_text}\n\n"
-            "Please provide your preliminary audit opinion as a valid JSON object."
+            f"Total records scanned: {total_records}\n\n"
+            f"Anomaly data:\n{anomaly_text}\n\n"
+            f"Junior Auditor's preliminary report:\n{junior_report}\n\n"
+            "Based on the above, provide your independent review. Point out any potential "
+            "false positives and offer reasonable business explanations. Keep it concise "
+            "and professional."
         )
 
-        print(f"[Agent] 正在向本地模型 '{self.model}' 发送请求，请观察风扇转速...")
+        print(f"[Challenger Agent] 正在向本地模型 '{self.model}' 发送复核请求...")
 
         try:
             response = self.client.chat.completions.create(
@@ -96,8 +101,9 @@ class JuniorAuditorAgent:
                 max_tokens=1024,
                 response_format={"type": "json_object"},
             )
-            print("[Agent] 报告生成成功！")
+            print("[Challenger Agent] 复核报告生成成功！")
             return response.choices[0].message.content
         except Exception as e:
-            # 如果本地 Ollama 没开，会在这里被精准捕获并抛出
-            raise RuntimeError(f"LLM API call failed (请确认终端已运行 ollama run llama3:8b): {e}")
+            raise RuntimeError(
+                f"Challenger Agent API call failed (确认终端已运行 ollama run llama3:8b): {e}"
+            )

@@ -3,11 +3,13 @@ Streamlit 主入口（MVP 版本）。
 侧边栏展示系统环境信息，主界面接收审计文件上传、数据预览及异常扫描。
 """
 
+import json
 import platform
 import streamlit as st
 from core.utils import get_project_root, get_mock_data_path
 from core.data_loader import AuditDataLoader
 from agents.auditor_agent import JuniorAuditorAgent
+from agents.challenger_agent import ChallengerAgent
 
 st.set_page_config(page_title="AuditCore", page_icon=":clipboard:", layout="wide")
 
@@ -126,23 +128,88 @@ if st.session_state.get("df") is not None:
         if not found_any:
             st.success("No anomalies found in preliminary scan.")
 
-        # AI Agent 审计意见模块
+        # AI Agent 多 Agent 串行审计模块
+        # 数据流转：初级审计员先出报告（JSON），反方 Agent 接收初级报告后输出 JSON 复核
         st.subheader("AI Agent's Preliminary Opinion")
 
+        # 统一按钮：一次点击触发串行执行，保证两份报告在同一轮渲染中产出
         if st.button("Generate AI Report"):
-            # 调用 Agent 引擎，异常数据从 scan_results 中流转至 Agent
-            with st.spinner("Agent is analyzing..."):
+            with st.spinner("Agents are analyzing..."):
                 try:
-                    agent = JuniorAuditorAgent()
-                    report = agent.generate_report(anomalies, stats)
-                    st.session_state["ai_report"] = report
-                except Exception as e:
-                    st.session_state["ai_report"] = f"[Error] {e}"
+                    # 第一阶段：JuniorAuditorAgent 生成初级审计意见（JSON 字符串）
+                    junior = JuniorAuditorAgent()
+                    junior_raw = junior.generate_report(anomalies, stats)
 
-        # 展示 Agent 报告，页面重运行时从 session_state 恢复
-        if st.session_state.get("ai_report") is not None:
-            report_text = st.session_state["ai_report"]
-            if report_text.startswith("[Error]"):
-                st.error(report_text)
+                    # JSON 解析逻辑：大模型可能偶尔输出不完美 JSON，需加防护
+                    try:
+                        junior_data = json.loads(junior_raw)
+                        junior_analysis = junior_data.get("analysis", "No analysis provided.")
+                        junior_score = int(junior_data.get("risk_score", 50))
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        # 解析失败时回退到默认值，避免程序崩溃
+                        junior_analysis = f"[JSON parse failed, raw output]: {junior_raw}"
+                        junior_score = 50
+
+                    # 第二阶段：数据从 scan_results + junior_report 流入 ChallengerAgent
+                    # ChallengerAgent 接收总记录数、异常文本、初级报告作为输入
+                    anomaly_text = junior._format_anomalies(anomalies)
+                    challenger = ChallengerAgent()
+                    challenger_raw = challenger.generate_review(
+                        total_records=stats["total_records"],
+                        anomaly_text=anomaly_text,
+                        junior_report=junior_analysis,
+                    )
+
+                    # JSON 解析逻辑：同样对反方输出做容错处理
+                    try:
+                        challenger_data = json.loads(challenger_raw)
+                        challenger_rebuttal = challenger_data.get("rebuttal", "No rebuttal provided.")
+                        challenger_score = int(challenger_data.get("adjusted_risk_score", 30))
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        # 解析失败时回退到默认值，避免程序崩溃
+                        challenger_rebuttal = f"[JSON parse failed, raw output]: {challenger_raw}"
+                        challenger_score = 30
+
+                    # 结构化数据存入 session_state 供 UI 渲染使用
+                    st.session_state["junior_analysis"] = junior_analysis
+                    st.session_state["junior_score"] = junior_score
+                    st.session_state["challenger_rebuttal"] = challenger_rebuttal
+                    st.session_state["challenger_score"] = challenger_score
+                except Exception as e:
+                    st.session_state["junior_analysis"] = f"[Error] {e}"
+                    st.session_state["junior_score"] = 0
+                    st.session_state["challenger_rebuttal"] = ""
+                    st.session_state["challenger_score"] = 0
+
+        # 左右两栏对比渲染：初级审计员 vs 反方复核
+        if st.session_state.get("junior_analysis") is not None:
+            left_col, right_col = st.columns(2)
+            with left_col:
+                st.subheader("Junior Auditor's Finding")
+                # 量化分数展示：初审风险分
+                st.metric(label="Junior Risk Score", value=f"{st.session_state['junior_score']}/100")
+                analysis_text = st.session_state["junior_analysis"]
+                if analysis_text.startswith("[Error]"):
+                    st.error(analysis_text)
+                else:
+                    st.info(analysis_text)
+            with right_col:
+                st.subheader("Challenger's Review")
+                # 量化分数展示：复核后风险分及差值（delta 为负表示风险下调）
+                junior_prev = st.session_state.get("junior_score", 50)
+                challenger_prev = st.session_state.get("challenger_score", 30)
+                st.metric(label="Challenger Risk Score", value=f"{challenger_prev}/100", delta=f"{challenger_prev - junior_prev}")
+                rebuttal_text = st.session_state.get("challenger_rebuttal", "")
+                if rebuttal_text == "":
+                    st.warning("Challenger report not available.")
+                elif rebuttal_text.startswith("[Error]"):
+                    st.error(rebuttal_text)
+                else:
+                    st.info(rebuttal_text)
+
+            # 总结论断：基于 Challenger 调整后的分数决定风险级别
+            final_score = st.session_state.get("challenger_score", 50)
+            if final_score > 60:
+                st.error("HIGH RISK: Immediate manual intervention recommended.")
             else:
-                st.info(report_text)
+                st.success("LOW RISK: Likely normal business write-offs.")
