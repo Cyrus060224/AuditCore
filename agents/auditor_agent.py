@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 初级审计 Agent 引擎。
 调用兼容 OpenAI 标准的大模型 API，对异常数据生成分析报告。
@@ -20,11 +21,15 @@ from openai import OpenAI
 class JuniorAuditorAgent:
     """初级审计 Agent，负责将异常数据交由 LLM 生成审计意见。"""
 
-    def __init__(self):
+    def __init__(self, lang: str = "English"):
         """
         初始化 LLM 客户端。
         逻辑：优先读取环境变量，如果读取失败，绝对强制回退到本地 Ollama 配置。
+        
+        Args:
+            lang: 界面语言，"English" 或 "中文"。用于控制大模型输出语言。
         """
+        self.lang = lang
         # 强制兜底：即便没有 .env 文件，也绝不连外网
         self.api_key = os.environ.get("OPENAI_API_KEY", "ollama_local")
         self.api_base = os.environ.get("OPENAI_BASE_URL", "http://localhost:11434/v1")
@@ -75,6 +80,13 @@ class JuniorAuditorAgent:
             '- "risk_score": an integer from 0 to 100, where higher means greater fraud risk.\n'
             "Example: {\"analysis\": \"...\", \"risk_score\": 75}"
         )
+
+        # 跨平台语言控制：中文模式下强制模型输出简体中文内容
+        if self.lang == "中文":
+            system_prompt += (
+                "\n\nCRITICAL: You must write the actual text content for your JSON values "
+                "entirely in Simplified Chinese (简体中文). Do not change the JSON keys."
+            )
 
         user_prompt = (
             f"Total records scanned: {total_records}\n"
