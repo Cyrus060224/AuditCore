@@ -11,6 +11,7 @@ from core.utils import get_project_root, get_mock_data_path
 from core.data_loader import AuditDataLoader
 from agents.auditor_agent import JuniorAuditorAgent
 from agents.challenger_agent import ChallengerAgent
+from agents.senior_partner_agent import SeniorPartnerAgent
 
 st.set_page_config(page_title="AuditCore", page_icon=":clipboard:", layout="wide")
 
@@ -47,6 +48,12 @@ TEXT = {
         "file_loaded": "File loaded",
         "rows": "rows",
         "failed_process": "Failed to process file",
+        "partner_verdict": "Final Partner Verdict",
+        "partner_risk": "Partner Risk Score",
+        "partner_reasoning": "Final Reasoning",
+        "partner_action": "Action Item",
+        "partner_not_available": "Partner verdict not available.",
+        "action_prefix": "Action: ",
     },
     "中文": {
         "title": "AuditCore 智能审计系统 MVP",
@@ -76,8 +83,42 @@ TEXT = {
         "file_loaded": "文件已加载",
         "rows": "行",
         "failed_process": "文件处理失败",
+        "partner_verdict": "最终合伙人裁决",
+        "partner_risk": "合伙人风险评分",
+        "partner_reasoning": "最终裁决理由",
+        "partner_action": "下一步行动",
+        "partner_not_available": "合伙人裁决不可用。",
+        "action_prefix": "行动建议: ",
     },
 }
+
+
+VERDICT_MAP = {
+    "English": {
+        "True Anomaly": "True Anomaly",
+        "False Positive": "False Positive",
+    },
+    "中文": {
+        "True Anomaly": "真实异常 (True Anomaly)",
+        "False Positive": "误报 (False Positive)",
+    },
+}
+
+
+def clear_ai_state():
+    """
+    语言切换时的防御性回调。
+    语言改变意味着大模型输出的语言不再匹配当前 UI，
+    所有 AI 生成的报告必须清空，强制用户在切换后的语言下重新点击按钮。
+    """
+    st.session_state.pop("junior_analysis", None)
+    st.session_state.pop("junior_score", None)
+    st.session_state.pop("challenger_rebuttal", None)
+    st.session_state.pop("challenger_score", None)
+    st.session_state.pop("partner_verdict", None)
+    st.session_state.pop("partner_risk", None)
+    st.session_state.pop("partner_reasoning", None)
+    st.session_state.pop("partner_action", None)
 
 
 def reset_all_state():
@@ -104,6 +145,7 @@ with st.sidebar:
         ["English", "中文"],
         index=0 if st.session_state["lang"] == "English" else 1,
         key="lang_selector",
+        on_change=clear_ai_state,
     )
     st.session_state["lang"] = lang
 
@@ -257,11 +299,43 @@ if st.session_state.get("df") is not None:
                     st.session_state["junior_score"] = junior_score
                     st.session_state["challenger_rebuttal"] = challenger_rebuttal
                     st.session_state["challenger_score"] = challenger_score
+
+                    # 第三阶段：SeniorPartnerAgent 综合两方报告做出最终裁决
+                    partner = SeniorPartnerAgent(lang=st.session_state["lang"])
+                    partner_raw = partner.generate_verdict(
+                        total_records=stats["total_records"],
+                        anomaly_count=stats["anomaly_count"],
+                        junior_report=junior_analysis,
+                        junior_score=junior_score,
+                        challenger_rebuttal=challenger_rebuttal,
+                        challenger_score=challenger_score,
+                    )
+
+                    try:
+                        partner_data = json.loads(partner_raw)
+                        partner_verdict = partner_data.get("final_verdict", "Unknown")
+                        partner_risk = int(partner_data.get("final_risk_score", 50))
+                        partner_reasoning = partner_data.get("reasoning", "No reasoning provided.")
+                        partner_action = partner_data.get("action_item", "No action specified.")
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        partner_verdict = "Unknown"
+                        partner_risk = 50
+                        partner_reasoning = f"[JSON parse failed, raw output]: {partner_raw}"
+                        partner_action = ""
+
+                    st.session_state["partner_verdict"] = partner_verdict
+                    st.session_state["partner_risk"] = partner_risk
+                    st.session_state["partner_reasoning"] = partner_reasoning
+                    st.session_state["partner_action"] = partner_action
                 except Exception as e:
                     st.session_state["junior_analysis"] = f"[Error] {e}"
                     st.session_state["junior_score"] = 0
                     st.session_state["challenger_rebuttal"] = ""
                     st.session_state["challenger_score"] = 0
+                    st.session_state["partner_verdict"] = "Unknown"
+                    st.session_state["partner_risk"] = 0
+                    st.session_state["partner_reasoning"] = f"[Error] {e}"
+                    st.session_state["partner_action"] = ""
 
         # 左右两栏对比渲染：初级审计员 vs 反方复核
         if st.session_state.get("junior_analysis") is not None:
@@ -293,3 +367,43 @@ if st.session_state.get("df") is not None:
                 st.error(t["high_risk"])
             else:
                 st.success(t["low_risk"])
+
+        # 第三阶段渲染：Senior Partner 最终裁决（全宽，位于两栏下方）
+        if st.session_state.get("partner_verdict") is not None:
+            st.divider()
+            st.subheader(t["partner_verdict"])
+
+            verdict_raw = st.session_state["partner_verdict"]
+            partner_risk = st.session_state.get("partner_risk", 0)
+            partner_reasoning = st.session_state.get("partner_reasoning", "")
+            partner_action = st.session_state.get("partner_action", "")
+
+            # 判决映射：根据当前语言将 JSON 中的英文值转换为界面显示文本
+            lang_key = st.session_state["lang"]
+            verdict_display = VERDICT_MAP.get(lang_key, {}).get(verdict_raw, verdict_raw)
+
+            # 风险状态灯：True Anomaly 亮红灯，False Positive 亮绿灯
+            if verdict_raw == "True Anomaly":
+                icon = "🔴"
+                st.error(f"{icon} **Final Verdict: :red[{verdict_display}]**")
+            elif verdict_raw == "False Positive":
+                icon = "🟢"
+                st.success(f"{icon} **Final Verdict: :green[{verdict_display}]**")
+            else:
+                icon = "⚪"
+                st.warning(f"{icon} **Final Verdict: {verdict_display}**")
+
+            cols_partner = st.columns(2)
+            with cols_partner[0]:
+                st.metric(label=t["partner_risk"], value=f"{partner_risk}/100")
+            with cols_partner[1]:
+                st.caption(t["partner_action"])
+                st.markdown(f"**:pushpin: {t['action_prefix']}{partner_action}**")
+
+            st.markdown(f"**{t['partner_reasoning']}:**")
+            if partner_reasoning.startswith("[Error]") or partner_reasoning.startswith("[JSON"):
+                st.error(partner_reasoning)
+            elif partner_reasoning == "":
+                st.warning(t["partner_not_available"])
+            else:
+                st.info(partner_reasoning)
