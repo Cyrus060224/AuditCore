@@ -2,17 +2,8 @@
 """
 高级合伙人 Agent 引擎。
 接收初级审计员和反方复核的结论，做最终仲裁裁决，输出结构化 JSON。
+支持 BYOK 多模型路由：Ollama / DeepSeek / OpenAI。
 """
-
-import os
-from pathlib import Path
-
-try:
-    from dotenv import load_dotenv
-    _env_path = Path(__file__).resolve().parent.parent / ".env"
-    load_dotenv(dotenv_path=_env_path, override=True)
-except ImportError:
-    pass
 
 from openai import OpenAI
 
@@ -24,28 +15,32 @@ class SeniorPartnerAgent:
     做出最终裁决，指定下一步具体行动。
     """
 
-    def __init__(self, lang: str = "English"):
+    def __init__(self, lang: str = "English", api_key: str = "", api_base: str = ""):
         """
-        初始化 LLM 客户端。
+        初始化 LLM 客户端，由 app.py 侧边栏的路由配置驱动。
 
         Args:
-            lang: 界面语言，"English" 或 "中文"。用于控制大模型输出语言。
+            lang: 界面语言，"English" 或 "中文"，控制大模型输出语言。
+            api_key: 从 session_state 传入的 API Key。
+            api_base: 从 session_state 传入的目标接口地址。
+
+        Raises:
+            RuntimeError: API Key 为空时抛出。
         """
         self.lang = lang
-        self.api_key = os.environ.get("OPENAI_API_KEY", "ollama_local")
-        self.api_base = os.environ.get("OPENAI_BASE_URL", "http://localhost:11434/v1")
-        self.model = os.environ.get("LLM_MODEL", "llama3:8b")
+        self.api_key = api_key
+        self.api_base = api_base
+        self.model = "llama3:8b" if "localhost" in api_base else "gpt-4o-mini"
 
         print("-" * 40)
-        print(f"[Senior Partner 诊断] API Key: {self.api_key}")
-        print(f"[Senior Partner 诊断] 目标接口: {self.api_base}")
-        print(f"[Senior Partner 诊断] 使用模型: {self.model}")
+        print(f"[Senior Partner] 目标接口: {self.api_base}")
+        print(f"[Senior Partner] 使用模型: {self.model}")
         print("-" * 40)
 
-        self.client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.api_base
-        )
+        if not self.api_key:
+            raise RuntimeError("API Key is empty. Please configure it in the sidebar.")
+
+        self.client = OpenAI(api_key=self.api_key, base_url=self.api_base)
 
     def generate_verdict(
         self,
@@ -69,6 +64,9 @@ class SeniorPartnerAgent:
 
         Returns:
             JSON 字符串，包含 final_verdict、final_risk_score、reasoning、action_item。
+
+        Raises:
+            RuntimeError: API 调用失败时抛出。
         """
         system_prompt = (
             "You are a highly experienced Audit Partner. You will receive an anomaly "
@@ -104,7 +102,7 @@ class SeniorPartnerAgent:
             f"Based on both reports above, deliver your final partner verdict as a JSON object."
         )
 
-        print(f"[Senior Partner] 正在向本地模型 '{self.model}' 发送最终仲裁请求...")
+        print(f"[Senior Partner] 正在向模型 '{self.model}' 发送最终仲裁请求...")
 
         try:
             response = self.client.chat.completions.create(
@@ -120,6 +118,4 @@ class SeniorPartnerAgent:
             print("[Senior Partner] 最终裁决生成成功！")
             return response.choices[0].message.content
         except Exception as e:
-            raise RuntimeError(
-                f"Senior Partner API call failed (确认终端已运行 ollama run llama3:8b): {e}"
-            )
+            raise RuntimeError(f"Senior Partner API call failed: {e}")

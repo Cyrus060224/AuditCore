@@ -1,19 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-反方审计 Agent 引擎。
-复用本地 Llama3:8b 模型，以反方视角对初级审计结果进行复核，降低误报率。
+反方（Challenger）审计 Agent 引擎。
+对 Junior 的结论进行复核与质疑，输出独立的审计意见。
+支持 BYOK 多模型路由：Ollama / DeepSeek / OpenAI。
 """
-
-import os
-from pathlib import Path
-
-try:
-    from dotenv import load_dotenv
-    # 显式指定 .env 路径，基于项目根目录，避免工作目录不确定导致加载失败
-    _env_path = Path(__file__).resolve().parent.parent / ".env"
-    load_dotenv(dotenv_path=_env_path, override=True)
-except ImportError:
-    pass
 
 from openai import OpenAI
 
@@ -21,41 +11,47 @@ from openai import OpenAI
 class ChallengerAgent:
     """
     反方审计 Agent。
-    扮演怀疑态度的高级审计合伙人，对初级审计员发现的异常数据
-    提出良性解释，旨在降低误报率。
+    不依赖 Junior 的判断逻辑，而是独立评估异常数据后给出反驳意见。
     """
 
-    def __init__(self, lang: str = "English"):
+    def __init__(self, lang: str = "English", api_key: str = "", api_base: str = ""):
         """
-        初始化 LLM 客户端。
-        逻辑：优先读取环境变量，如果读取失败，绝对强制回退到本地 Ollama 配置。
-        
+        初始化 LLM 客户端，由 app.py 侧边栏的路由配置驱动。
+
         Args:
-            lang: 界面语言，"English" 或 "中文"。用于控制大模型输出语言。
+            lang: 界面语言，"English" 或 "中文"，控制大模型输出语言。
+            api_key: 从 session_state 传入的 API Key。
+            api_base: 从 session_state 传入的目标接口地址。
+
+        Raises:
+            RuntimeError: API Key 为空时抛出。
         """
         self.lang = lang
-        # 强制兜底：即便没有 .env 文件，也绝不连外网
-        self.api_key = os.environ.get("OPENAI_API_KEY", "ollama_local")
-        self.api_base = os.environ.get("OPENAI_BASE_URL", "http://localhost:11434/v1")
-        self.model = os.environ.get("LLM_MODEL", "llama3:8b")
+        self.api_key = api_key
+        self.api_base = api_base
+        self.model = "llama3:8b" if "localhost" in api_base else "gpt-4o-mini"
 
         print("-" * 40)
-        print(f"[Challenger Agent 诊断] API Key: {self.api_key}")
-        print(f"[Challenger Agent 诊断] 目标接口: {self.api_base}")
-        print(f"[Challenger Agent 诊断] 使用模型: {self.model}")
+        print(f"[Challenger] 目标接口: {self.api_base}")
+        print(f"[Challenger] 使用模型: {self.model}")
         print("-" * 40)
 
-        # 实例化客户端，严格锁死目标地址
-        self.client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.api_base
-        )
+        if not self.api_key:
+            raise RuntimeError("API Key is empty. Please configure it in the sidebar.")
+
+        self.client = OpenAI(api_key=self.api_key, base_url=self.api_base)
 
     @staticmethod
     def _format_anomalies(anomalies_dict: dict) -> str:
         """
-        数据流转逻辑：将 Pandas 抓出的异常 DataFrame 字典，
-        降维转换成简单的纯文本格式，方便丢给大模型阅读。
+        数据流转：将 Pandas 抓出的异常 DataFrame 字典，
+        转换为纯文本格式，供大模型理解。
+
+        Args:
+            anomalies_dict: 键为异常类型名称，值为异常行 DataFrame。
+
+        Returns:
+            格式化后的文本摘要。
         """
         lines = []
         for label, df in anomalies_dict.items():
@@ -67,24 +63,45 @@ class ChallengerAgent:
 
         return "\n".join(lines) if lines else "No anomalies found."
 
-    def generate_review(self, total_records: int, anomaly_text: str, junior_report: str) -> str:
+    def generate_rebuttal(
+        self,
+        anomalies_dict: dict,
+        stats: dict,
+        junior_report: str,
+        junior_score: int,
+    ) -> str:
         """
-        核心逻辑：接收总记录数、异常数据文本、初级审计员报告，
-        生成反方复核意见。
+        核心逻辑：接收异常数据和 Junior 的报告，
+        独立评估后生成反驳意见，返回 JSON 字符串。
+
+        Args:
+            anomalies_dict: 异常分类字典。
+            stats: 统计指标字典。
+            junior_report: Junior Auditor 的分析文本。
+            junior_score: Junior 给出的风险评分。
+
+        Returns:
+            LLM 返回的 JSON 字符串，包含 rebuttal 和 adjusted_risk_score。
+
+        Raises:
+            RuntimeError: API 调用失败时抛出。
         """
+        anomaly_text = self._format_anomalies(anomalies_dict)
+        total_records = stats.get("total_records", "N/A")
+        anomaly_count = stats.get("anomaly_count", "N/A")
+
         system_prompt = (
-            "You are a skeptical Senior Audit Partner. Your job is to review the anomalies "
-            "found by the Junior Auditor. You must actively look for benign, normal business "
-            "explanations for these anomalies (e.g., negative amounts could be refunds or "
-            "voided transactions). Your goal is to reduce false positives.\n"
-            "You MUST respond with a single, valid JSON object ONLY, with no markdown "
-            "formatting or surrounding text. The JSON must contain exactly two keys:\n"
-            '- "rebuttal": your independent review and potential false positive analysis (string),\n'
-            '- "adjusted_risk_score": an integer from 0 to 100, the adjusted risk score after your review.\n'
+            "You are the Challenger Auditor — a skeptical, independent reviewer tasked "
+            "with reviewing the findings of a Junior Auditor. You must examine the raw "
+            "anomaly data and decide whether the Junior's conclusion is accurate, "
+            "overstated, or understated. You MUST respond with a single, valid JSON object "
+            "ONLY, with no markdown formatting or surrounding text. The JSON must contain "
+            "exactly two keys:\n"
+            '- "rebuttal": your independent analysis (string),\n'
+            '- "adjusted_risk_score": your own risk score from 0 to 100 (integer).\n'
             "Example: {\"rebuttal\": \"...\", \"adjusted_risk_score\": 30}"
         )
 
-        # 跨平台语言控制：中文模式下强制模型输出简体中文内容
         if self.lang == "中文":
             system_prompt += (
                 "\n\nCRITICAL: You must write the actual text content for your JSON values "
@@ -92,15 +109,16 @@ class ChallengerAgent:
             )
 
         user_prompt = (
-            f"Total records scanned: {total_records}\n\n"
-            f"Anomaly data:\n{anomaly_text}\n\n"
-            f"Junior Auditor's preliminary report:\n{junior_report}\n\n"
-            "Based on the above, provide your independent review. Point out any potential "
-            "false positives and offer reasonable business explanations. Keep it concise "
-            "and professional."
+            f"Total records scanned: {total_records}\n"
+            f"Total anomalies detected: {anomaly_count}\n\n"
+            f"=== Raw Anomaly Data ===\n{anomaly_text}\n\n"
+            f"=== Junior Auditor's Finding ===\n"
+            f"Risk Score: {junior_score}/100\n"
+            f"Analysis: {junior_report}\n\n"
+            "Please provide your independent rebuttal as a valid JSON object."
         )
 
-        print(f"[Challenger Agent] 正在向本地模型 '{self.model}' 发送复核请求...")
+        print(f"[Challenger] 正在向模型 '{self.model}' 发送复核请求...")
 
         try:
             response = self.client.chat.completions.create(
@@ -109,13 +127,11 @@ class ChallengerAgent:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0.3,
+                temperature=0.4,
                 max_tokens=1024,
                 response_format={"type": "json_object"},
             )
-            print("[Challenger Agent] 复核报告生成成功！")
+            print("[Challenger] 复核意见生成成功！")
             return response.choices[0].message.content
         except Exception as e:
-            raise RuntimeError(
-                f"Challenger Agent API call failed (确认终端已运行 ollama run llama3:8b): {e}"
-            )
+            raise RuntimeError(f"Challenger Agent API call failed: {e}")

@@ -2,18 +2,8 @@
 """
 初级审计 Agent 引擎。
 调用兼容 OpenAI 标准的大模型 API，对异常数据生成分析报告。
+支持 BYOK 多模型路由：Ollama / DeepSeek / OpenAI。
 """
-
-import os
-from pathlib import Path
-
-try:
-    from dotenv import load_dotenv
-    # 显式指定 .env 路径，基于项目根目录，避免工作目录不确定导致加载失败
-    _env_path = Path(__file__).resolve().parent.parent / ".env"
-    load_dotenv(dotenv_path=_env_path, override=True)
-except ImportError:
-    pass
 
 from openai import OpenAI
 
@@ -21,31 +11,32 @@ from openai import OpenAI
 class JuniorAuditorAgent:
     """初级审计 Agent，负责将异常数据交由 LLM 生成审计意见。"""
 
-    def __init__(self, lang: str = "English"):
+    def __init__(self, lang: str = "English", api_key: str = "", api_base: str = ""):
         """
-        初始化 LLM 客户端。
-        逻辑：优先读取环境变量，如果读取失败，绝对强制回退到本地 Ollama 配置。
-        
+        初始化 LLM 客户端，由 app.py 侧边栏的路由配置驱动。
+
         Args:
-            lang: 界面语言，"English" 或 "中文"。用于控制大模型输出语言。
+            lang: 界面语言，"English" 或 "中文"，控制大模型输出语言。
+            api_key: 从 session_state 传入的 API Key（云端）或占位符（Ollama）。
+            api_base: 从 session_state 传入的目标接口地址。
+
+        Raises:
+            RuntimeError: API Key 为空时抛出。
         """
         self.lang = lang
-        # 强制兜底：即便没有 .env 文件，也绝不连外网
-        self.api_key = os.environ.get("OPENAI_API_KEY", "ollama_local")
-        self.api_base = os.environ.get("OPENAI_BASE_URL", "http://localhost:11434/v1")
-        self.model = os.environ.get("LLM_MODEL", "llama3:8b")
+        self.api_key = api_key
+        self.api_base = api_base
+        self.model = "llama3:8b" if "localhost" in api_base else "gpt-4o-mini"
 
         print("-" * 40)
-        print(f"[Agent 诊断] API Key: {self.api_key}")
-        print(f"[Agent 诊断] 目标接口: {self.api_base}")
-        print(f"[Agent 诊断] 使用模型: {self.model}")
+        print(f"[Junior Agent] 目标接口: {self.api_base}")
+        print(f"[Junior Agent] 使用模型: {self.model}")
         print("-" * 40)
 
-        # 实例化客户端，严格锁死目标地址
-        self.client = OpenAI(
-            api_key=self.api_key, 
-            base_url=self.api_base
-        )
+        if not self.api_key:
+            raise RuntimeError("API Key is empty. Please configure it in the sidebar.")
+
+        self.client = OpenAI(api_key=self.api_key, base_url=self.api_base)
 
     @staticmethod
     def _format_anomalies(anomalies_dict: dict) -> str:
@@ -66,6 +57,16 @@ class JuniorAuditorAgent:
     def generate_report(self, anomalies_dict: dict, stats: dict) -> str:
         """
         业务逻辑：组装 Prompt，向大模型发送请求并接收审计报告。
+
+        Args:
+            anomalies_dict: 异常分类字典。
+            stats: 统计指标字典。
+
+        Returns:
+            LLM 返回的 JSON 字符串。
+
+        Raises:
+            RuntimeError: API 调用失败时抛出。
         """
         anomaly_text = self._format_anomalies(anomalies_dict)
         total_records = stats.get("total_records", "N/A")
@@ -81,7 +82,6 @@ class JuniorAuditorAgent:
             "Example: {\"analysis\": \"...\", \"risk_score\": 75}"
         )
 
-        # 跨平台语言控制：中文模式下强制模型输出简体中文内容
         if self.lang == "中文":
             system_prompt += (
                 "\n\nCRITICAL: You must write the actual text content for your JSON values "
@@ -95,7 +95,7 @@ class JuniorAuditorAgent:
             "Please provide your preliminary audit opinion as a valid JSON object."
         )
 
-        print(f"[Agent] 正在向本地模型 '{self.model}' 发送请求，请观察风扇转速...")
+        print(f"[Junior Agent] 正在向模型 '{self.model}' 发送请求...")
 
         try:
             response = self.client.chat.completions.create(
@@ -108,8 +108,7 @@ class JuniorAuditorAgent:
                 max_tokens=1024,
                 response_format={"type": "json_object"},
             )
-            print("[Agent] 报告生成成功！")
+            print("[Junior Agent] 报告生成成功！")
             return response.choices[0].message.content
         except Exception as e:
-            # 如果本地 Ollama 没开，会在这里被精准捕获并抛出
-            raise RuntimeError(f"LLM API call failed (请确认终端已运行 ollama run llama3:8b): {e}")
+            raise RuntimeError(f"Junior Agent API call failed: {e}")

@@ -165,9 +165,53 @@ with st.sidebar:
     st.divider()
     st.caption(t["cross_platform"])
 
+    # AI Engine Configuration
+    st.divider()
+    st.header("AI Engine Configuration")
+
+    MODEL_OPTIONS = {
+        "Local (Ollama)": {"api_base": "http://localhost:11434/v1", "api_key": "ollama_local"},
+        "DeepSeek API": {"api_base": "https://api.deepseek.com/v1", "api_key": ""},
+        "OpenAI API": {"api_base": "https://api.openai.com/v1", "api_key": ""},
+    }
+
+    model_choice = st.selectbox(
+        "Select Model / 选择模型",
+        list(MODEL_OPTIONS.keys()),
+        index=0 if st.session_state.get("model_choice") in MODEL_OPTIONS
+        else list(MODEL_OPTIONS.keys()).index(st.session_state.get("model_choice", "Local (Ollama)")),
+        key="model_selector",
+    )
+    st.session_state["model_choice"] = model_choice
+
+    if model_choice == "Local (Ollama)":
+        st.success("🟢 100% Private: Data stays on your device.")
+        st.session_state["api_key"] = "ollama_local"
+        st.session_state["api_base"] = MODEL_OPTIONS[model_choice]["api_base"]
+    else:
+        st.warning("🔴 Warning: Financial data will be sent to external cloud servers.")
+        user_key = st.text_input(
+            "API Key",
+            type="password",
+            value=st.session_state.get("api_key", ""),
+            key="api_key_input",
+        )
+        st.session_state["api_key"] = user_key
+        st.session_state["api_base"] = MODEL_OPTIONS[model_choice]["api_base"]
+
+
 # 语言状态已在侧边栏中确定，此处重新获取当前语言对应的文本字典
 # 并将 t 提升到外层作用域，供后续 UI 渲染使用
 t = TEXT[st.session_state["lang"]]
+
+# 初始化引擎配置默认值
+if "model_choice" not in st.session_state:
+    st.session_state["model_choice"] = "Local (Ollama)"
+if "api_key" not in st.session_state:
+    st.session_state["api_key"] = "ollama_local"
+if "api_base" not in st.session_state:
+    st.session_state["api_base"] = "http://localhost:11434/v1"
+
 st.title(t["title"])
 
 
@@ -261,9 +305,18 @@ if st.session_state.get("df") is not None:
         if st.button(t["generate_report"]):
             with st.spinner("Agents are analyzing..."):
                 try:
+                    # 引擎路由验证：云端模型需要用户提供 API Key
+                    api_key = st.session_state.get("api_key", "")
+                    model_choice = st.session_state.get("model_choice", "Local (Ollama)")
+                    if model_choice != "Local (Ollama)" and not api_key.strip():
+                        raise RuntimeError(f"API Key is required for {model_choice}. Please enter your key in the sidebar.")
+
                     # 第一阶段：JuniorAuditorAgent 生成初级审计意见（JSON 字符串）
-                    # 将当前语言状态传递给 Agent，用于控制大模型输出语言
-                    junior = JuniorAuditorAgent(lang=st.session_state["lang"])
+                    junior = JuniorAuditorAgent(
+                        lang=st.session_state["lang"],
+                        api_key=api_key,
+                        api_base=st.session_state["api_base"],
+                    )
                     junior_raw = junior.generate_report(anomalies, stats)
 
                     # JSON 解析逻辑：大模型可能偶尔输出不完美 JSON，需加防护
@@ -275,15 +328,13 @@ if st.session_state.get("df") is not None:
                         junior_analysis = f"[JSON parse failed, raw output]: {junior_raw}"
                         junior_score = 50
 
-                    # 第二阶段：数据从 scan_results + junior_report 流入 ChallengerAgent
-                    anomaly_text = junior._format_anomalies(anomalies)
-                    # 将当前语言状态传递给反方 Agent
-                    challenger = ChallengerAgent(lang=st.session_state["lang"])
-                    challenger_raw = challenger.generate_review(
-                        total_records=stats["total_records"],
-                        anomaly_text=anomaly_text,
-                        junior_report=junior_analysis,
+                    # 第二阶段：ChallengerAgent 独立评估原始异常数据，对 Junior 结论进行验证
+                    challenger = ChallengerAgent(
+                        lang=st.session_state["lang"],
+                        api_key=api_key,
+                        api_base=st.session_state["api_base"],
                     )
+                    challenger_raw = challenger.generate_rebuttal(anomalies, stats, junior_analysis, junior_score)
 
                     # JSON 解析逻辑：同样对反方输出做容错处理
                     try:
@@ -301,7 +352,11 @@ if st.session_state.get("df") is not None:
                     st.session_state["challenger_score"] = challenger_score
 
                     # 第三阶段：SeniorPartnerAgent 综合两方报告做出最终裁决
-                    partner = SeniorPartnerAgent(lang=st.session_state["lang"])
+                    partner = SeniorPartnerAgent(
+                        lang=st.session_state["lang"],
+                        api_key=api_key,
+                        api_base=st.session_state["api_base"],
+                    )
                     partner_raw = partner.generate_verdict(
                         total_records=stats["total_records"],
                         anomaly_count=stats["anomaly_count"],
