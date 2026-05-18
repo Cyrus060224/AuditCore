@@ -5,12 +5,14 @@ Streamlit 主入口（MVP 版本）。
 """
 
 import json
+from dataclasses import asdict
 import platform
 import streamlit as st
+from agents import FactCheckAgent
 from core.utils import get_project_root, get_mock_data_path
+from core.contracts import FactCheckResult, RuleFinding
 from core.data_loader import AuditDataLoader
 from agents.auditor_agent import JuniorAuditorAgent
-from agents.challenger_agent import ChallengerAgent
 from agents.senior_partner_agent import SeniorPartnerAgent
 
 st.set_page_config(page_title="AuditCore", page_icon=":clipboard:", layout="wide")
@@ -115,6 +117,10 @@ def clear_ai_state():
     st.session_state.pop("junior_score", None)
     st.session_state.pop("challenger_rebuttal", None)
     st.session_state.pop("challenger_score", None)
+    st.session_state.pop("fact_check_analysis", None)
+    st.session_state.pop("fact_check_support_score", None)
+    st.session_state.pop("fact_check_conflict_score", None)
+    st.session_state.pop("patent_contracts", None)
     st.session_state.pop("partner_verdict", None)
     st.session_state.pop("partner_risk", None)
     st.session_state.pop("partner_reasoning", None)
@@ -131,6 +137,7 @@ def reset_all_state():
     st.session_state.pop("df", None)
     st.session_state.pop("scan_results", None)
     st.session_state.pop("ai_report", None)
+    clear_ai_state()
 
 
 # 初始化语言状态，确保首次加载有默认值
@@ -328,28 +335,55 @@ if st.session_state.get("df") is not None:
                         junior_analysis = f"[JSON parse failed, raw output]: {junior_raw}"
                         junior_score = 50
 
-                    # 第二阶段：ChallengerAgent 独立评估原始异常数据，对 Junior 结论进行验证
-                    challenger = ChallengerAgent(
+                    # 第二阶段：FactCheckAgent 对初级结论做事实核查。
+                    # 为兼容现有 Partner 阶段，这里临时映射为旧版 challenger 文本与分值。
+                    fact_checker = FactCheckAgent(
                         lang=st.session_state["lang"],
                         api_key=api_key,
                         api_base=st.session_state["api_base"],
                     )
-                    challenger_raw = challenger.generate_rebuttal(anomalies, stats, junior_analysis, junior_score)
+                    fact_check_raw = fact_checker.generate_fact_check(
+                        anomalies,
+                        stats,
+                        junior_analysis,
+                        junior_score,
+                    )
 
-                    # JSON 解析逻辑：同样对反方输出做容错处理
+                    # JSON 解析逻辑：事实核查阶段先标准化到专利契约，再兼容旧版字段。
                     try:
-                        challenger_data = json.loads(challenger_raw)
-                        challenger_rebuttal = challenger_data.get("rebuttal", "No rebuttal provided.")
-                        challenger_score = int(challenger_data.get("adjusted_risk_score", 30))
+                        fact_check_data = json.loads(fact_check_raw)
+                        fact_check_result = FactCheckResult.from_payload(fact_check_data)
                     except (json.JSONDecodeError, TypeError, ValueError):
-                        challenger_rebuttal = f"[JSON parse failed, raw output]: {challenger_raw}"
-                        challenger_score = 30
+                        fact_check_result = FactCheckResult.from_payload(
+                            payload=None,
+                            fallback_analysis=f"[JSON parse failed, raw output]: {fact_check_raw}",
+                        )
+
+                    challenger_rebuttal = fact_check_result.analysis
+                    challenger_score = fact_check_result.to_legacy_challenger_score()
 
                     # 结构化数据存入 session_state 供 UI 渲染使用
                     st.session_state["junior_analysis"] = junior_analysis
                     st.session_state["junior_score"] = junior_score
                     st.session_state["challenger_rebuttal"] = challenger_rebuttal
                     st.session_state["challenger_score"] = challenger_score
+                    st.session_state["fact_check_analysis"] = fact_check_result.analysis
+                    st.session_state["fact_check_support_score"] = fact_check_result.support_score
+                    st.session_state["fact_check_conflict_score"] = fact_check_result.conflict_score
+                    st.session_state["patent_contracts"] = {
+                        "rule_findings": [
+                            asdict(
+                                RuleFinding(
+                                    label=label,
+                                    record_count=len(df),
+                                    summary=f"{label}: {len(df)} record(s)",
+                                )
+                            )
+                            for label, df in anomalies.items()
+                            if not df.empty
+                        ],
+                        "fact_check_result": asdict(fact_check_result),
+                    }
 
                     # 第三阶段：SeniorPartnerAgent 综合两方报告做出最终裁决
                     partner = SeniorPartnerAgent(
@@ -387,6 +421,10 @@ if st.session_state.get("df") is not None:
                     st.session_state["junior_score"] = 0
                     st.session_state["challenger_rebuttal"] = ""
                     st.session_state["challenger_score"] = 0
+                    st.session_state["fact_check_analysis"] = ""
+                    st.session_state["fact_check_support_score"] = 0.0
+                    st.session_state["fact_check_conflict_score"] = 0.0
+                    st.session_state["patent_contracts"] = {}
                     st.session_state["partner_verdict"] = "Unknown"
                     st.session_state["partner_risk"] = 0
                     st.session_state["partner_reasoning"] = f"[Error] {e}"
@@ -408,6 +446,10 @@ if st.session_state.get("df") is not None:
                 junior_prev = st.session_state.get("junior_score", 50)
                 challenger_prev = st.session_state.get("challenger_score", 30)
                 st.metric(label=t["challenger_risk"], value=f"{challenger_prev}/100", delta=f"{challenger_prev - junior_prev}")
+                fact_support = st.session_state.get("fact_check_support_score")
+                fact_conflict = st.session_state.get("fact_check_conflict_score")
+                if fact_support is not None and fact_conflict is not None:
+                    st.caption(f"Support Score: {fact_support:.2f} | Conflict Score: {fact_conflict:.2f}")
                 rebuttal_text = st.session_state.get("challenger_rebuttal", "")
                 if rebuttal_text == "":
                     st.warning(t["challenger_not_available"])
