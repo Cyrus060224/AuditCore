@@ -9,6 +9,7 @@ from dataclasses import asdict
 import platform
 import streamlit as st
 from agents import FactCheckAgent
+from agents.rule_agent import RuleAgent
 from core.utils import get_project_root, get_mock_data_path
 from core.contracts import FactCheckResult, RuleFinding
 from core.data_loader import AuditDataLoader
@@ -268,9 +269,9 @@ if st.session_state.get("df") is not None:
     # 异常扫描按钮
     st.subheader(t["preliminary_scan"])
     if st.button(t["run_scan"]):
-        loader = AuditDataLoader()
         current_df = st.session_state["df"]
-        result = loader.basic_scan(current_df)
+        rule_agent = RuleAgent()
+        result = rule_agent.build_scan_result(current_df)
         st.session_state["scan_results"] = result
         st.session_state.pop("ai_report", None)
 
