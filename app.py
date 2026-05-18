@@ -11,8 +11,9 @@ import streamlit as st
 from agents import FactCheckAgent
 from agents.rule_agent import RuleAgent
 from core.utils import get_project_root, get_mock_data_path
-from core.contracts import FactCheckResult, RuleFinding
+from core.contracts import EvidenceEdge, EvidenceNode, FactCheckResult, RuleFinding
 from core.data_loader import AuditDataLoader
+from core.evidence_graph import EvidenceGraph
 from agents.auditor_agent import JuniorAuditorAgent
 from agents.senior_partner_agent import SeniorPartnerAgent
 
@@ -121,6 +122,7 @@ def clear_ai_state():
     st.session_state.pop("fact_check_analysis", None)
     st.session_state.pop("fact_check_support_score", None)
     st.session_state.pop("fact_check_conflict_score", None)
+    st.session_state.pop("evidence_graph", None)
     st.session_state.pop("patent_contracts", None)
     st.session_state.pop("partner_verdict", None)
     st.session_state.pop("partner_risk", None)
@@ -319,6 +321,17 @@ if st.session_state.get("df") is not None:
                     if model_choice != "Local (Ollama)" and not api_key.strip():
                         raise RuntimeError(f"API Key is required for {model_choice}. Please enter your key in the sidebar.")
 
+                    evidence_graph = EvidenceGraph()
+                    scan_result = st.session_state["scan_results"]
+                    for i, finding in enumerate(scan_result["rule_findings"]):
+                        evidence_graph.add_node(
+                            EvidenceNode(
+                                node_id=f"rule_fact_{i}",
+                                node_type="RuleFinding",
+                                content=finding.summary,
+                            )
+                        )
+
                     # 第一阶段：JuniorAuditorAgent 生成初级审计意见（JSON 字符串）
                     junior = JuniorAuditorAgent(
                         lang=st.session_state["lang"],
@@ -363,6 +376,43 @@ if st.session_state.get("df") is not None:
                     challenger_rebuttal = fact_check_result.analysis
                     challenger_score = fact_check_result.to_legacy_challenger_score()
 
+                    junior_node_id = "junior_conclusion"
+                    challenger_node_id = "challenger_conclusion"
+                    evidence_graph.add_node(
+                        EvidenceNode(
+                            node_id=junior_node_id,
+                            node_type="JuniorConclusion",
+                            content=junior_analysis,
+                            metadata={"risk_score": junior_score},
+                        )
+                    )
+                    evidence_graph.add_node(
+                        EvidenceNode(
+                            node_id=challenger_node_id,
+                            node_type="ChallengerConclusion",
+                            content=challenger_rebuttal,
+                            metadata={
+                                "risk_score": challenger_score,
+                                "support_score": fact_check_result.support_score,
+                                "conflict_score": fact_check_result.conflict_score,
+                            },
+                        )
+                    )
+                    if fact_check_result.conflict_score > fact_check_result.support_score:
+                        relation = "conflict"
+                        weight = fact_check_result.conflict_score
+                    else:
+                        relation = "support"
+                        weight = fact_check_result.support_score
+                    evidence_graph.add_edge(
+                        EvidenceEdge(
+                            source_id=challenger_node_id,
+                            target_id=junior_node_id,
+                            relation=relation,
+                            weight=weight,
+                        )
+                    )
+
                     # 结构化数据存入 session_state 供 UI 渲染使用
                     st.session_state["junior_analysis"] = junior_analysis
                     st.session_state["junior_score"] = junior_score
@@ -371,6 +421,7 @@ if st.session_state.get("df") is not None:
                     st.session_state["fact_check_analysis"] = fact_check_result.analysis
                     st.session_state["fact_check_support_score"] = fact_check_result.support_score
                     st.session_state["fact_check_conflict_score"] = fact_check_result.conflict_score
+                    st.session_state["evidence_graph"] = evidence_graph
                     st.session_state["patent_contracts"] = {
                         "rule_findings": [
                             asdict(
@@ -425,6 +476,7 @@ if st.session_state.get("df") is not None:
                     st.session_state["fact_check_analysis"] = ""
                     st.session_state["fact_check_support_score"] = 0.0
                     st.session_state["fact_check_conflict_score"] = 0.0
+                    st.session_state["evidence_graph"] = EvidenceGraph()
                     st.session_state["patent_contracts"] = {}
                     st.session_state["partner_verdict"] = "Unknown"
                     st.session_state["partner_risk"] = 0
@@ -468,6 +520,15 @@ if st.session_state.get("df") is not None:
 
         # 第三阶段渲染：Senior Partner 最终裁决（全宽，位于两栏下方）
         if st.session_state.get("partner_verdict") is not None:
+            evidence_graph = st.session_state.get("evidence_graph", EvidenceGraph())
+            global_consistency_score = evidence_graph.calculate_consistency_score()
+            st.markdown("---")
+            st.subheader("📊 专利防御层：中间表示控制装置")
+            st.metric(
+                label="专利级全局一致性评分 (Global Consistency Score)",
+                value=f"{global_consistency_score:.2f}",
+            )
+
             st.divider()
             st.subheader(t["partner_verdict"])
 
