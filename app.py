@@ -243,7 +243,7 @@ if uploaded_file is not None:
 if st.session_state.get("df") is not None:
     df = st.session_state["df"]
 
-    # 动态列名重命名：确保后续 basic_scan 能适配不同表头
+    # 动态列名重命名：确保后续规则扫描能适配不同表头
     # 在数据加载后，立即使用候选列名列表匹配并重命名第一个找到的列为 'Amount'
     amount_candidates = ["data", "Amount", "金额", "数值"]
     for candidate in amount_candidates:
