@@ -108,6 +108,10 @@ VERDICT_MAP = {
     },
 }
 
+STATE_INIT = "STATE_INIT"
+STATE_FINAL_VERDICT = "STATE_FINAL_VERDICT"
+STATE_ROLLBACK_REVIEW = "STATE_ROLLBACK_REVIEW"
+
 
 def clear_ai_state():
     """
@@ -522,6 +526,16 @@ if st.session_state.get("df") is not None:
         if st.session_state.get("partner_verdict") is not None:
             evidence_graph = st.session_state.get("evidence_graph", EvidenceGraph())
             global_consistency_score = evidence_graph.calculate_consistency_score()
+
+            # 设定专利硬核熔断阈值
+            CONSISTENCY_THRESHOLD = 0.80
+            current_state = STATE_INIT
+
+            if global_consistency_score >= CONSISTENCY_THRESHOLD:
+                current_state = STATE_FINAL_VERDICT
+            else:
+                current_state = STATE_ROLLBACK_REVIEW
+
             st.markdown("---")
             st.subheader("📊 专利防御层：中间表示控制装置")
             st.metric(
@@ -529,40 +543,77 @@ if st.session_state.get("df") is not None:
                 value=f"{global_consistency_score:.2f}",
             )
 
-            st.divider()
-            st.subheader(t["partner_verdict"])
+            if current_state == STATE_FINAL_VERDICT:
+                st.success("✅ 穿透审计通过：数据一致性达标，状态机安全推进至最终合伙人裁决阶段。")
 
-            verdict_raw = st.session_state["partner_verdict"]
-            partner_risk = st.session_state.get("partner_risk", 0)
-            partner_reasoning = st.session_state.get("partner_reasoning", "")
-            partner_action = st.session_state.get("partner_action", "")
+                st.divider()
+                st.subheader(t["partner_verdict"])
 
-            # 判决映射：根据当前语言将 JSON 中的英文值转换为界面显示文本
-            lang_key = st.session_state["lang"]
-            verdict_display = VERDICT_MAP.get(lang_key, {}).get(verdict_raw, verdict_raw)
+                verdict_raw = st.session_state["partner_verdict"]
+                partner_risk = st.session_state.get("partner_risk", 0)
+                partner_reasoning = st.session_state.get("partner_reasoning", "")
+                partner_action = st.session_state.get("partner_action", "")
 
-            # 风险状态灯：True Anomaly 亮红灯，False Positive 亮绿灯
-            if verdict_raw == "True Anomaly":
-                icon = "🔴"
-                st.error(f"{icon} **Final Verdict: :red[{verdict_display}]**")
-            elif verdict_raw == "False Positive":
-                icon = "🟢"
-                st.success(f"{icon} **Final Verdict: :green[{verdict_display}]**")
+                # 判决映射：根据当前语言将 JSON 中的英文值转换为界面显示文本
+                lang_key = st.session_state["lang"]
+                verdict_display = VERDICT_MAP.get(lang_key, {}).get(verdict_raw, verdict_raw)
+
+                # 风险状态灯：True Anomaly 亮红灯，False Positive 亮绿灯
+                if verdict_raw == "True Anomaly":
+                    icon = "🔴"
+                    st.error(f"{icon} **Final Verdict: :red[{verdict_display}]**")
+                elif verdict_raw == "False Positive":
+                    icon = "🟢"
+                    st.success(f"{icon} **Final Verdict: :green[{verdict_display}]**")
+                else:
+                    icon = "⚪"
+                    st.warning(f"{icon} **Final Verdict: {verdict_display}**")
+
+                cols_partner = st.columns(2)
+                with cols_partner[0]:
+                    st.metric(label=t["partner_risk"], value=f"{partner_risk}/100")
+                with cols_partner[1]:
+                    st.caption(t["partner_action"])
+                    st.markdown(f"**:pushpin: {t['action_prefix']}{partner_action}**")
+
+                st.markdown(f"**{t['partner_reasoning']}:**")
+                if partner_reasoning.startswith("[Error]") or partner_reasoning.startswith("[JSON"):
+                    st.error(partner_reasoning)
+                elif partner_reasoning == "":
+                    st.warning(t["partner_not_available"])
+                else:
+                    st.info(partner_reasoning)
             else:
-                icon = "⚪"
-                st.warning(f"{icon} **Final Verdict: {verdict_display}**")
+                st.error("🚨 专利熔断机制触发：检测到审计事实存在严重冲突，一致性评分低于阈值！")
+                st.subheader("冲突协同质证区")
+                st.warning("状态机已回退至 STATE_ROLLBACK_REVIEW：请先完成冲突事实质证，再推进最终合伙人裁决。")
 
-            cols_partner = st.columns(2)
-            with cols_partner[0]:
-                st.metric(label=t["partner_risk"], value=f"{partner_risk}/100")
-            with cols_partner[1]:
-                st.caption(t["partner_action"])
-                st.markdown(f"**:pushpin: {t['action_prefix']}{partner_action}**")
+                disputed_edges = [
+                    edge
+                    for edge in evidence_graph.edges
+                    if edge.relation.strip().lower() in {"conflict", "conflicts", "冲突"}
+                ]
+                if not disputed_edges:
+                    disputed_edges = evidence_graph.edges
 
-            st.markdown(f"**{t['partner_reasoning']}:**")
-            if partner_reasoning.startswith("[Error]") or partner_reasoning.startswith("[JSON"):
-                st.error(partner_reasoning)
-            elif partner_reasoning == "":
-                st.warning(t["partner_not_available"])
-            else:
-                st.info(partner_reasoning)
+                dispute_rows = []
+                for edge in disputed_edges:
+                    source_node = evidence_graph.nodes.get(edge.source_id)
+                    target_node = evidence_graph.nodes.get(edge.target_id)
+                    dispute_rows.append(
+                        {
+                            "source_node": edge.source_id,
+                            "source_type": source_node.node_type if source_node else "Unknown",
+                            "target_node": edge.target_id,
+                            "target_type": target_node.node_type if target_node else "Unknown",
+                            "relation": edge.relation,
+                            "weight": f"{edge.weight:.2f}",
+                            "source_content": source_node.content if source_node else "",
+                            "target_content": target_node.content if target_node else "",
+                        }
+                    )
+
+                if dispute_rows:
+                    st.dataframe(dispute_rows, use_container_width=True)
+                else:
+                    st.info("当前证据图尚未形成可展示的质证边，请重新运行多 Agent 审计流程。")
