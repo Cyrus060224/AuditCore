@@ -17,7 +17,52 @@ from core.evidence_graph import EvidenceGraph
 from agents.auditor_agent import JuniorAuditorAgent
 from agents.senior_partner_agent import SeniorPartnerAgent
 
-st.set_page_config(page_title="AuditCore", page_icon=":clipboard:", layout="wide")
+st.set_page_config(page_title="AuditCore", layout="wide", initial_sidebar_state="expanded")
+st.markdown('''
+<style>
+/* 隐藏原生菜单和页脚 */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+
+/* 极简灰白背景与现代无衬线字体 */
+.stApp {
+    background-color: #fbfbfb;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* Metric 核心指标大字号与极客风 */
+div[data-testid="stMetricValue"] {
+    font-size: 3.5rem !important;
+    font-weight: 800 !important;
+    color: #0f172a !important;
+    letter-spacing: -0.05em;
+}
+div[data-testid="stMetricLabel"] {
+    font-size: 0.9rem !important;
+    font-weight: 600 !important;
+    color: #64748b !important;
+    text-transform: uppercase;
+}
+
+/* 标签页 Tabs 现代化 */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 30px;
+    border-bottom: 1px solid #e2e8f0;
+}
+.stTabs [data-baseweb="tab"] {
+    height: 50px;
+    background-color: transparent;
+    color: #64748b;
+    font-weight: 600;
+    border: none;
+}
+.stTabs [aria-selected="true"] {
+    color: #0f172a;
+    border-bottom: 2px solid #0f172a !important;
+}
+</style>
+''', unsafe_allow_html=True)
 
 # 跨平台编码声明：文件顶部 # -*- coding: utf-8 -*- 确保 Windows/GBk 环境下不乱码
 # 所有字符串操作均基于 Unicode，避免不同操作系统默认编码差异
@@ -113,6 +158,20 @@ STATE_FINAL_VERDICT = "STATE_FINAL_VERDICT"
 STATE_ROLLBACK_REVIEW = "STATE_ROLLBACK_REVIEW"
 
 
+def ensure_current_evidence_graph(graph) -> EvidenceGraph:
+    """
+    Streamlit 热重载后，session_state 可能保留旧版 EvidenceGraph 实例。
+    这里将旧实例迁移到当前类定义，保留已冻结的 nodes/edges。
+    """
+    if isinstance(graph, EvidenceGraph) and hasattr(graph, "export_working_paper"):
+        return graph
+
+    upgraded_graph = EvidenceGraph()
+    upgraded_graph.nodes = getattr(graph, "nodes", {})
+    upgraded_graph.edges = getattr(graph, "edges", [])
+    return upgraded_graph
+
+
 def clear_ai_state():
     """
     语言切换时的防御性回调。
@@ -127,6 +186,8 @@ def clear_ai_state():
     st.session_state.pop("fact_check_support_score", None)
     st.session_state.pop("fact_check_conflict_score", None)
     st.session_state.pop("evidence_graph", None)
+    st.session_state.pop("conflict_arbitration", None)
+    st.session_state.pop("manual_final_confirmation", None)
     st.session_state.pop("patent_contracts", None)
     st.session_state.pop("partner_verdict", None)
     st.session_state.pop("partner_risk", None)
@@ -213,6 +274,10 @@ with st.sidebar:
         st.session_state["api_key"] = user_key
         st.session_state["api_base"] = MODEL_OPTIONS[model_choice]["api_base"]
 
+    st.divider()
+    st.header("Control Panel / 控制面板")
+    uploaded_file = st.file_uploader(t["uploader_label"], type=["xlsx"], on_change=reset_all_state)
+
 
 # 语言状态已在侧边栏中确定，此处重新获取当前语言对应的文本字典
 # 并将 t 提升到外层作用域，供后续 UI 渲染使用
@@ -226,13 +291,9 @@ if "api_key" not in st.session_state:
 if "api_base" not in st.session_state:
     st.session_state["api_base"] = "http://localhost:11434/v1"
 
-st.title(t["title"])
+st.title("⚡ AuditCore 智能穿透审计系统")
+st.caption("EvidenceGraph-powered multi-agent audit control plane")
 
-
-# 主界面：文件上传
-# on_change=reset_all_state 确保只要用户重新选择文件或点击叉号，
-# 所有旧状态立即物理抹除，打破 Streamlit 文件缓存机制
-uploaded_file = st.file_uploader(t["uploader_label"], type=["xlsx"], on_change=reset_all_state)
 
 # 优先级纠正：有上传文件时，以内存中的上传对象为唯一数据源
 # 禁止在有上传文件的情况下，去读取 mock_data 文件夹里的本地同名文件
@@ -262,24 +323,14 @@ if st.session_state.get("df") is not None:
     file_label = uploaded_file.name if uploaded_file is not None else st.session_state.get("file_name", "unknown")
     st.success(f"{t['file_loaded']}: {file_label} — {len(df)} {t['rows']}")
 
-    # 数据概览
-    # Data Preview 直接读取 st.session_state["df"]，df 为空时不显示
-    st.subheader(t["data_preview"])
-    st.write(f"{t['total_rows']}: {len(df)}")
-    st.dataframe(
-        st.session_state["df"],
-        use_container_width=True,
-        height=300,
-    )
-
-    # 异常扫描按钮
-    st.subheader(t["preliminary_scan"])
-    if st.button(t["run_scan"]):
-        current_df = st.session_state["df"]
-        rule_agent = RuleAgent()
-        result = rule_agent.build_scan_result(current_df)
-        st.session_state["scan_results"] = result
-        st.session_state.pop("ai_report", None)
+    # 异常扫描按钮进入侧边栏控制面板，主区只负责展示结果。
+    with st.sidebar:
+        if st.button(t["run_scan"], use_container_width=True):
+            current_df = st.session_state["df"]
+            rule_agent = RuleAgent()
+            result = rule_agent.build_scan_result(current_df)
+            st.session_state["scan_results"] = result
+            st.session_state.pop("ai_report", None)
 
     # 读取扫描结果，无论当前是按钮点击还是页面重运行
     if st.session_state.get("scan_results") is not None:
@@ -287,38 +338,59 @@ if st.session_state.get("df") is not None:
         anomalies = result["anomalies"]
         stats = result["stats"]
 
-        # 仪表盘指标展示
-        cols = st.columns(3)
-        with cols[0]:
+        metric_graph = ensure_current_evidence_graph(st.session_state.get("evidence_graph", EvidenceGraph()))
+        global_consistency_score = metric_graph.calculate_consistency_score()
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric(label="全局一致性评分", value=f"{global_consistency_score:.2f}")
+        with col2:
             st.metric(label=t["total_records"], value=stats["total_records"])
-        with cols[1]:
+        with col3:
             st.metric(label=t["anomalies_detected"], value=stats["anomaly_count"])
-        with cols[2]:
+        with col4:
             if stats["max_amount"] is not None:
-                st.metric(label=t["max_amount"], value=f"{stats['max_amount']:,.2f}")
+                st.metric(label="涉案总金额", value=f"{stats['max_amount']:,.2f}")
             else:
-                st.metric(label=t["max_amount"], value="N/A")
+                st.metric(label="图节点数", value=len(metric_graph.nodes))
 
-        # 异常详情折叠面板
-        found_any = False
-        for label, anomaly_df in anomalies.items():
-            if not anomaly_df.empty:
-                found_any = True
-                with st.expander(f"{t['anomaly_view']} — {label} ({len(anomaly_df)} {t['anomaly_detected']})", expanded=True):
-                    st.error(f"{label}: {len(anomaly_df)} {t['anomaly_detected']}")
-                    st.dataframe(anomaly_df)
+        tab_dashboard, tab_war_room, tab_graph, tab_report = st.tabs(
+            ["📊 审计总控台", "🤖 智能体博弈", "🕸️ 熔断控制室", "📄 最终工作底稿"]
+        )
 
-        if not found_any:
-            st.success(t["no_anomalies"])
+        with tab_dashboard:
+            with st.expander("查看原始凭证数据", expanded=False):
+                st.dataframe(
+                    st.session_state["df"],
+                    use_container_width=True,
+                    height=300,
+                )
+
+            found_any = False
+            for label, anomaly_df in anomalies.items():
+                if not anomaly_df.empty:
+                    found_any = True
+                    with st.expander(f"{t['anomaly_view']} — {label} ({len(anomaly_df)} {t['anomaly_detected']})", expanded=True):
+                        st.error(f"{label}: {len(anomaly_df)} {t['anomaly_detected']}")
+                        st.dataframe(anomaly_df, use_container_width=True)
+
+            if not found_any:
+                st.success(t["no_anomalies"])
 
         # AI Agent 多 Agent 串行审计模块
         # 数据流转：初级审计员先出报告（JSON），反方 Agent 接收初级报告后输出 JSON 复核
-        st.subheader(t["ai_opinion"])
+        with st.sidebar:
+            st.divider()
+            st.subheader(t["ai_opinion"])
+            generate_report_clicked = st.button(t["generate_report"], use_container_width=True)
 
         # 统一按钮：一次点击触发串行执行，保证两份报告在同一轮渲染中产出
-        if st.button(t["generate_report"]):
+        if generate_report_clicked:
             with st.spinner("Agents are analyzing..."):
                 try:
+                    st.session_state.pop("conflict_arbitration", None)
+                    st.session_state.pop("manual_final_confirmation", None)
+
                     # 引擎路由验证：云端模型需要用户提供 API Key
                     api_key = st.session_state.get("api_key", "")
                     model_choice = st.session_state.get("model_choice", "Local (Ollama)")
@@ -472,6 +544,7 @@ if st.session_state.get("df") is not None:
                     st.session_state["partner_risk"] = partner_risk
                     st.session_state["partner_reasoning"] = partner_reasoning
                     st.session_state["partner_action"] = partner_action
+                    st.rerun()
                 except Exception as e:
                     st.session_state["junior_analysis"] = f"[Error] {e}"
                     st.session_state["junior_score"] = 0
@@ -487,47 +560,12 @@ if st.session_state.get("df") is not None:
                     st.session_state["partner_reasoning"] = f"[Error] {e}"
                     st.session_state["partner_action"] = ""
 
-        # 左右两栏对比渲染：初级审计员 vs 反方复核
-        if st.session_state.get("junior_analysis") is not None:
-            left_col, right_col = st.columns(2)
-            with left_col:
-                st.subheader(t["junior_finding"])
-                st.metric(label=t["junior_risk"], value=f"{st.session_state['junior_score']}/100")
-                analysis_text = st.session_state["junior_analysis"]
-                if analysis_text.startswith("[Error]"):
-                    st.error(analysis_text)
-                else:
-                    st.info(analysis_text)
-            with right_col:
-                st.subheader(t["challenger_review"])
-                junior_prev = st.session_state.get("junior_score", 50)
-                challenger_prev = st.session_state.get("challenger_score", 30)
-                st.metric(label=t["challenger_risk"], value=f"{challenger_prev}/100", delta=f"{challenger_prev - junior_prev}")
-                fact_support = st.session_state.get("fact_check_support_score")
-                fact_conflict = st.session_state.get("fact_check_conflict_score")
-                if fact_support is not None and fact_conflict is not None:
-                    st.caption(f"Support Score: {fact_support:.2f} | Conflict Score: {fact_conflict:.2f}")
-                rebuttal_text = st.session_state.get("challenger_rebuttal", "")
-                if rebuttal_text == "":
-                    st.warning(t["challenger_not_available"])
-                elif rebuttal_text.startswith("[Error]"):
-                    st.error(rebuttal_text)
-                else:
-                    st.info(rebuttal_text)
-
-            # 总结论断：基于 Challenger 调整后的分数决定风险级别
-            final_score = st.session_state.get("challenger_score", 50)
-            if final_score > 60:
-                st.error(t["high_risk"])
-            else:
-                st.success(t["low_risk"])
-
-        # 第三阶段渲染：Senior Partner 最终裁决（全宽，位于两栏下方）
+        # 第三阶段渲染：使用企业级 Dashboard Tabs 承载最终状态、智能体博弈、熔断和底稿导出。
         if st.session_state.get("partner_verdict") is not None:
-            evidence_graph = st.session_state.get("evidence_graph", EvidenceGraph())
+            evidence_graph = ensure_current_evidence_graph(st.session_state.get("evidence_graph", EvidenceGraph()))
+            st.session_state["evidence_graph"] = evidence_graph
             global_consistency_score = evidence_graph.calculate_consistency_score()
 
-            # 设定专利硬核熔断阈值
             CONSISTENCY_THRESHOLD = 0.80
             current_state = STATE_INIT
 
@@ -535,85 +573,173 @@ if st.session_state.get("df") is not None:
                 current_state = STATE_FINAL_VERDICT
             else:
                 current_state = STATE_ROLLBACK_REVIEW
+            if st.session_state.get("manual_final_confirmation"):
+                current_state = STATE_FINAL_VERDICT
 
-            st.markdown("---")
-            st.subheader("📊 专利防御层：中间表示控制装置")
-            st.metric(
-                label="专利级全局一致性评分 (Global Consistency Score)",
-                value=f"{global_consistency_score:.2f}",
-            )
+            disputed_edges = [
+                edge
+                for edge in evidence_graph.edges
+                if edge.relation.strip().lower() in {"conflict", "conflicts", "冲突"}
+            ]
+            if not disputed_edges:
+                disputed_edges = evidence_graph.edges
 
-            if current_state == STATE_FINAL_VERDICT:
-                st.success("✅ 穿透审计通过：数据一致性达标，状态机安全推进至最终合伙人裁决阶段。")
+            dispute_rows = []
+            for edge in disputed_edges:
+                source_node = evidence_graph.nodes.get(edge.source_id)
+                target_node = evidence_graph.nodes.get(edge.target_id)
+                dispute_rows.append(
+                    {
+                        "source_node": edge.source_id,
+                        "source_type": source_node.node_type if source_node else "Unknown",
+                        "target_node": edge.target_id,
+                        "target_type": target_node.node_type if target_node else "Unknown",
+                        "relation": edge.relation,
+                        "weight": f"{edge.weight:.2f}",
+                        "source_content": source_node.content if source_node else "",
+                        "target_content": target_node.content if target_node else "",
+                    }
+                )
 
-                st.divider()
-                st.subheader(t["partner_verdict"])
+            with tab_dashboard:
+                with st.container(border=True):
+                    st.subheader("专利防御层：中间表示控制装置")
 
-                verdict_raw = st.session_state["partner_verdict"]
-                partner_risk = st.session_state.get("partner_risk", 0)
-                partner_reasoning = st.session_state.get("partner_reasoning", "")
-                partner_action = st.session_state.get("partner_action", "")
+                    if current_state == STATE_FINAL_VERDICT:
+                        if st.session_state.get("manual_final_confirmation"):
+                            st.success("✅ 冲突仲裁完成：状态机经人工最终确认推进至最终合伙人裁决阶段。")
+                            arbitration_text = st.session_state.get("conflict_arbitration", "")
+                            if arbitration_text:
+                                st.info(arbitration_text)
+                        else:
+                            st.success("✅ 穿透审计通过：数据一致性达标，状态机安全推进至最终合伙人裁决阶段。")
+                    else:
+                        st.error("🚨 专利熔断机制触发：检测到审计事实存在严重冲突，一致性评分低于阈值！")
 
-                # 判决映射：根据当前语言将 JSON 中的英文值转换为界面显示文本
-                lang_key = st.session_state["lang"]
-                verdict_display = VERDICT_MAP.get(lang_key, {}).get(verdict_raw, verdict_raw)
+                if current_state == STATE_FINAL_VERDICT:
+                    with st.container(border=True):
+                        st.subheader(t["partner_verdict"])
 
-                # 风险状态灯：True Anomaly 亮红灯，False Positive 亮绿灯
-                if verdict_raw == "True Anomaly":
-                    icon = "🔴"
-                    st.error(f"{icon} **Final Verdict: :red[{verdict_display}]**")
-                elif verdict_raw == "False Positive":
-                    icon = "🟢"
-                    st.success(f"{icon} **Final Verdict: :green[{verdict_display}]**")
-                else:
-                    icon = "⚪"
-                    st.warning(f"{icon} **Final Verdict: {verdict_display}**")
+                        verdict_raw = st.session_state["partner_verdict"]
+                        partner_risk = st.session_state.get("partner_risk", 0)
+                        partner_reasoning = st.session_state.get("partner_reasoning", "")
+                        partner_action = st.session_state.get("partner_action", "")
+                        lang_key = st.session_state["lang"]
+                        verdict_display = VERDICT_MAP.get(lang_key, {}).get(verdict_raw, verdict_raw)
 
-                cols_partner = st.columns(2)
-                with cols_partner[0]:
-                    st.metric(label=t["partner_risk"], value=f"{partner_risk}/100")
-                with cols_partner[1]:
-                    st.caption(t["partner_action"])
-                    st.markdown(f"**:pushpin: {t['action_prefix']}{partner_action}**")
+                        if verdict_raw == "True Anomaly":
+                            st.error(f"🔴 **Final Verdict: :red[{verdict_display}]**")
+                        elif verdict_raw == "False Positive":
+                            st.success(f"🟢 **Final Verdict: :green[{verdict_display}]**")
+                        else:
+                            st.warning(f"⚪ **Final Verdict: {verdict_display}**")
 
-                st.markdown(f"**{t['partner_reasoning']}:**")
-                if partner_reasoning.startswith("[Error]") or partner_reasoning.startswith("[JSON"):
-                    st.error(partner_reasoning)
-                elif partner_reasoning == "":
-                    st.warning(t["partner_not_available"])
-                else:
-                    st.info(partner_reasoning)
-            else:
-                st.error("🚨 专利熔断机制触发：检测到审计事实存在严重冲突，一致性评分低于阈值！")
-                st.subheader("冲突协同质证区")
-                st.warning("状态机已回退至 STATE_ROLLBACK_REVIEW：请先完成冲突事实质证，再推进最终合伙人裁决。")
+                        cols_partner = st.columns(2)
+                        with cols_partner[0]:
+                            st.metric(label=t["partner_risk"], value=f"{partner_risk}/100")
+                        with cols_partner[1]:
+                            st.caption(t["partner_action"])
+                            st.markdown(f"**:pushpin: {t['action_prefix']}{partner_action}**")
 
-                disputed_edges = [
-                    edge
-                    for edge in evidence_graph.edges
-                    if edge.relation.strip().lower() in {"conflict", "conflicts", "冲突"}
-                ]
-                if not disputed_edges:
-                    disputed_edges = evidence_graph.edges
+                        st.markdown(f"**{t['partner_reasoning']}:**")
+                        if partner_reasoning.startswith("[Error]") or partner_reasoning.startswith("[JSON"):
+                            st.error(partner_reasoning)
+                        elif partner_reasoning == "":
+                            st.warning(t["partner_not_available"])
+                        else:
+                            st.info(partner_reasoning)
 
-                dispute_rows = []
-                for edge in disputed_edges:
-                    source_node = evidence_graph.nodes.get(edge.source_id)
-                    target_node = evidence_graph.nodes.get(edge.target_id)
-                    dispute_rows.append(
-                        {
-                            "source_node": edge.source_id,
-                            "source_type": source_node.node_type if source_node else "Unknown",
-                            "target_node": edge.target_id,
-                            "target_type": target_node.node_type if target_node else "Unknown",
-                            "relation": edge.relation,
-                            "weight": f"{edge.weight:.2f}",
-                            "source_content": source_node.content if source_node else "",
-                            "target_content": target_node.content if target_node else "",
-                        }
+            with tab_war_room:
+                with st.container(border=True):
+                    left_col, right_col = st.columns(2)
+                    with left_col:
+                        st.subheader(t["junior_finding"])
+                        st.metric(label=t["junior_risk"], value=f"{st.session_state.get('junior_score', 0)}/100")
+                        analysis_text = st.session_state.get("junior_analysis", "")
+                        if analysis_text.startswith("[Error]"):
+                            st.error(analysis_text)
+                        else:
+                            st.info(analysis_text)
+                    with right_col:
+                        st.subheader(t["challenger_review"])
+                        junior_prev = st.session_state.get("junior_score", 50)
+                        challenger_prev = st.session_state.get("challenger_score", 30)
+                        st.metric(label=t["challenger_risk"], value=f"{challenger_prev}/100", delta=f"{challenger_prev - junior_prev}")
+                        fact_support = st.session_state.get("fact_check_support_score")
+                        fact_conflict = st.session_state.get("fact_check_conflict_score")
+                        if fact_support is not None and fact_conflict is not None:
+                            st.caption(f"Support Score: {fact_support:.2f} | Conflict Score: {fact_conflict:.2f}")
+                        rebuttal_text = st.session_state.get("challenger_rebuttal", "")
+                        if rebuttal_text == "":
+                            st.warning(t["challenger_not_available"])
+                        elif rebuttal_text.startswith("[Error]"):
+                            st.error(rebuttal_text)
+                        else:
+                            st.warning(rebuttal_text)
+
+                    final_score = st.session_state.get("challenger_score", 50)
+                    if final_score > 60:
+                        st.error(t["high_risk"])
+                    else:
+                        st.success(t["low_risk"])
+
+            with tab_graph:
+                with st.container(border=True):
+                    st.subheader("图谱与熔断控制")
+                    st.metric(
+                        label="Global Consistency Score",
+                        value=f"{global_consistency_score:.2f}",
                     )
 
-                if dispute_rows:
-                    st.dataframe(dispute_rows, use_container_width=True)
-                else:
-                    st.info("当前证据图尚未形成可展示的质证边，请重新运行多 Agent 审计流程。")
+                    if current_state == STATE_ROLLBACK_REVIEW:
+                        st.error("🚨 专利熔断机制触发：检测到审计事实存在严重冲突，一致性评分低于阈值！")
+                        st.warning("状态机已回退至 STATE_ROLLBACK_REVIEW：请先完成冲突事实质证，再推进最终合伙人裁决。")
+                    else:
+                        st.success("✅ DAG 状态机当前处于 STATE_FINAL_VERDICT。")
+
+                    if dispute_rows:
+                        st.dataframe(dispute_rows, use_container_width=True)
+                    else:
+                        st.info("当前证据图尚未形成可展示的质证边，请重新运行多 Agent 审计流程。")
+
+                    if current_state == STATE_ROLLBACK_REVIEW and st.button("⚡ 启动 FactCheckAgent 深度仲裁"):
+                        with st.spinner("FactCheckAgent is resolving conflicts..."):
+                            try:
+                                api_key = st.session_state.get("api_key", "")
+                                model_choice = st.session_state.get("model_choice", "Local (Ollama)")
+                                if model_choice != "Local (Ollama)" and not api_key.strip():
+                                    raise RuntimeError(f"API Key is required for {model_choice}. Please enter your key in the sidebar.")
+
+                                junior_node = evidence_graph.nodes.get("junior_conclusion")
+                                challenger_node = evidence_graph.nodes.get("challenger_conclusion")
+                                fact_checker = FactCheckAgent(
+                                    lang=st.session_state["lang"],
+                                    api_key=api_key,
+                                    api_base=st.session_state["api_base"],
+                                )
+                                arbitration_text = fact_checker.resolve_conflicts(
+                                    conflict_edges=disputed_edges,
+                                    junior_node=junior_node,
+                                    challenger_node=challenger_node,
+                                )
+                                st.session_state["conflict_arbitration"] = arbitration_text
+                                st.session_state["manual_final_confirmation"] = True
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"FactCheckAgent 深度仲裁失败: {e}")
+
+            with tab_report:
+                with st.container(border=True):
+                    st.subheader("底稿导出中心")
+                    if current_state == STATE_FINAL_VERDICT:
+                        report_md = evidence_graph.export_working_paper()
+                        with st.expander("📄 查看完整审计工作底稿", expanded=True):
+                            st.markdown(report_md)
+                        st.download_button(
+                            label="💾 下载底稿 (.md)",
+                            data=report_md,
+                            file_name="audit_working_paper.md",
+                            mime="text/markdown",
+                        )
+                    else:
+                        st.warning("当前状态未进入最终合伙人确认阶段，底稿导出已被状态机暂缓。")

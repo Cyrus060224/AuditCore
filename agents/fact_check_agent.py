@@ -7,6 +7,8 @@
 
 from openai import OpenAI
 
+from core.contracts import EvidenceEdge, EvidenceNode
+
 
 class FactCheckAgent:
     """
@@ -152,3 +154,73 @@ class FactCheckAgent:
             return response.choices[0].message.content
         except Exception as e:
             raise RuntimeError(f"FactCheckAgent API call failed: {e}")
+
+    def resolve_conflicts(
+        self,
+        conflict_edges: list[EvidenceEdge],
+        junior_node: EvidenceNode | None,
+        challenger_node: EvidenceNode | None,
+    ) -> str:
+        """
+        对证据图中的冲突边进行深度仲裁，返回最终冲突消解文本。
+
+        Args:
+            conflict_edges: 证据图中触发回退的冲突边集合。
+            junior_node: 初审结论节点。
+            challenger_node: 反方质证结论节点。
+
+        Returns:
+            高级审计经理视角下的仲裁结论文本。
+
+        Raises:
+            RuntimeError: API 调用失败时抛出。
+        """
+        edge_lines = []
+        for edge in conflict_edges:
+            edge_lines.append(
+                "- "
+                f"source={edge.source_id}, target={edge.target_id}, "
+                f"relation={edge.relation}, weight={edge.weight:.2f}"
+            )
+        conflict_text = "\n".join(edge_lines) if edge_lines else "No explicit conflict edges were provided."
+
+        junior_text = junior_node.content if junior_node else "Junior conclusion node is missing."
+        challenger_text = challenger_node.content if challenger_node else "Challenger conclusion node is missing."
+
+        system_prompt = (
+            "You are a senior audit manager performing final arbitration in a multi-agent audit workflow. "
+            "Your job is to resolve conflicts between a junior auditor's initial conclusion and a challenger "
+            "reviewer's rebuttal using the provided evidence graph conflict edges. "
+            "Return a clear arbitration conclusion in plain text. Include: final judgment, key reason, "
+            "which side is better supported, and the next audit action. Do not use markdown tables."
+        )
+
+        if self.lang == "中文":
+            system_prompt += "\n\n请使用简体中文输出仲裁结论。"
+
+        user_prompt = (
+            "=== Junior Auditor Conclusion ===\n"
+            f"{junior_text}\n\n"
+            "=== Challenger Review Conclusion ===\n"
+            f"{challenger_text}\n\n"
+            "=== Evidence Graph Conflict Edges ===\n"
+            f"{conflict_text}\n\n"
+            "As the senior audit manager, arbitrate this conflict and provide the final conflict-resolution conclusion."
+        )
+
+        print(f"[FactCheckAgent] 正在向模型 '{self.model}' 发送冲突仲裁请求...")
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.2,
+                max_tokens=1200,
+            )
+            print("[FactCheckAgent] 冲突仲裁结论生成成功！")
+            return response.choices[0].message.content
+        except Exception as e:
+            raise RuntimeError(f"FactCheckAgent conflict resolution failed: {e}")

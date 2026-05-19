@@ -8,4 +8,4 @@ script = ""
 [[actions]]
 name = "运行"
 icon = "run"
-command = "python -m streamlit run app.py"
+command = "/usr/local/bin/python3 -m streamlit run app.py"
