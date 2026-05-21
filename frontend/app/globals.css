@@ -5,8 +5,33 @@
   --font-mono: var(--font-geist-mono);
 }
 
-body {
-  background: #f8fafc;
-  color: #0f172a;
+html {
   font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
+
+body {
+  background: #ffffff;
+  color: #1d1d1f;
+}
+
+::-webkit-scrollbar {
+  width: 0px;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.5s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.stagger-1 { animation-delay: 0.04s; animation-fill-mode: both; }
+.stagger-2 { animation-delay: 0.08s; animation-fill-mode: both; }
+.stagger-3 { animation-delay: 0.12s; animation-fill-mode: both; }
+.stagger-4 { animation-delay: 0.16s; animation-fill-mode: both; }
+.stagger-5 { animation-delay: 0.2s; animation-fill-mode: both; }
+.stagger-6 { animation-delay: 0.24s; animation-fill-mode: both; }
