@@ -6,8 +6,12 @@ import {
   AlertCircle,
   Clock,
   X,
+  Bot,
+  ArrowRight,
+  Server,
 } from "lucide-react";
-import { useState, useCallback } from "react";
+import Link from "next/link";
+import { useState, useCallback, useEffect } from "react";
 
 interface AuditData {
   global_consistency_score: number;
@@ -54,15 +58,59 @@ const MOCK_DATA: AuditData = {
   },
 };
 
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_AUDIT_API_BASE_URL ?? "http://127.0.0.1:8000";
+const LATEST_AUDIT_STORAGE_KEY = "auditcore.latestAuditRun";
+
+type ApiStatus = "checking" | "online" | "offline";
+
 export default function Dashboard() {
   const [auditData, setAuditData] = useState<AuditData>(MOCK_DATA);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
+
+  const checkApiStatus = useCallback(async () => {
+    setApiStatus("checking");
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/health`, {
+        method: "GET",
+      });
+      setApiStatus(response.ok ? "online" : "offline");
+    } catch {
+      setApiStatus("offline");
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadApiStatus() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/health`, {
+          method: "GET",
+        });
+        if (!cancelled) {
+          setApiStatus(response.ok ? "online" : "offline");
+        }
+      } catch {
+        if (!cancelled) {
+          setApiStatus("offline");
+        }
+      }
+    }
+
+    loadApiStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleFileUpload = useCallback(async (file: File) => {
     if (!file.name.endsWith(".xlsx")) {
-      setError("Only .xlsx files are accepted");
+      setError("请上传 .xlsx 格式的审计数据文件。");
       return;
     }
 
@@ -73,25 +121,43 @@ export default function Dashboard() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const response = await fetch("http://localhost:8000/api/audit", {
+      const response = await fetch(`${API_BASE_URL}/api/audit`, {
         method: "POST",
         body: formData,
       });
 
       if (!response.ok) {
-        throw new Error(`Server responded with ${response.status}`);
+        throw new Error(`审计接口返回异常状态：${response.status}`);
       }
 
       const data: AuditData = await response.json();
+      if ("error" in data) {
+        throw new Error(String(data.error));
+      }
       setAuditData(data);
+      window.localStorage.setItem(
+        LATEST_AUDIT_STORAGE_KEY,
+        JSON.stringify({
+          fileName: file.name,
+          uploadedAt: new Date().toISOString(),
+          auditData: data,
+        })
+      );
+      setApiStatus("online");
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Upload failed";
+      const msg =
+        err instanceof TypeError
+          ? `后端服务未连接。请确认 AuditCore API 已在 ${API_BASE_URL} 启动。`
+          : err instanceof Error
+          ? err.message
+          : "上传失败，请检查文件内容或后端服务状态。";
       setError(msg);
+      checkApiStatus();
       setAuditData(MOCK_DATA);
     } finally {
       setIsAnalyzing(false);
     }
-  }, []);
+  }, [checkApiStatus]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -122,10 +188,24 @@ export default function Dashboard() {
   return (
     <div>
       {/* Page title */}
-      <div className="mb-12 animate-fade-in stagger-1">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Audit Console
-        </h1>
+      <div className="mb-12 flex flex-col gap-5 animate-fade-in stagger-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Audit Console
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-400">
+            上传审计数据完成规则穿透扫描，并进入虚拟审计组查看多 Agent 质证与仲裁链路。
+          </p>
+          <ApiStatusLine status={apiStatus} onRefresh={checkApiStatus} />
+        </div>
+        <Link
+          href="/arena"
+          className="inline-flex h-10 w-fit items-center gap-2 rounded-lg border border-gray-200 px-3.5 text-sm font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50"
+        >
+          <Bot size={16} />
+          虚拟审计组
+          <ArrowRight size={15} />
+        </Link>
       </div>
 
       {/* Metrics row */}
@@ -172,6 +252,7 @@ export default function Dashboard() {
           isAnalyzing={isAnalyzing}
           error={error}
           dragging={dragging}
+          apiStatus={apiStatus}
           onDrop={handleDrop}
           onChange={handleChange}
           onDragOver={(e: React.DragEvent) => {
@@ -232,6 +313,47 @@ function MetricValue({
   );
 }
 
+/* ─── API Status ─── */
+
+function ApiStatusLine({
+  status,
+  onRefresh,
+}: {
+  status: ApiStatus;
+  onRefresh: () => void;
+}) {
+  const statusText =
+    status === "online"
+      ? "后端已连接"
+      : status === "checking"
+      ? "正在检查后端连接"
+      : "后端未连接";
+  const dotColor =
+    status === "online"
+      ? "bg-emerald-500"
+      : status === "checking"
+      ? "bg-blue-500"
+      : "bg-red-500";
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-gray-400">
+      <span className="inline-flex items-center gap-1.5">
+        <span className={`h-1.5 w-1.5 rounded-full ${dotColor}`} />
+        <Server size={13} />
+        {statusText}
+      </span>
+      <span className="font-mono text-[11px]">{API_BASE_URL}</span>
+      <button
+        type="button"
+        onClick={onRefresh}
+        className="rounded-md px-1.5 py-0.5 font-medium text-gray-500 transition-colors hover:bg-gray-50 hover:text-gray-800"
+      >
+        重新检查
+      </button>
+    </div>
+  );
+}
+
 /* ─── Verdict ─── */
 
 function Verdict({
@@ -275,6 +397,7 @@ function UploadSection({
   isAnalyzing,
   error,
   dragging,
+  apiStatus,
   onDrop,
   onChange,
   onDragOver,
@@ -283,6 +406,7 @@ function UploadSection({
   isAnalyzing: boolean;
   error: string | null;
   dragging: boolean;
+  apiStatus: ApiStatus;
   onDrop: (e: React.DragEvent) => void;
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onDragOver: (e: React.DragEvent) => void;
@@ -317,17 +441,21 @@ function UploadSection({
           >
             {isAnalyzing ? (
               <Clock size={17} className="animate-spin text-blue-500" />
+            ) : apiStatus === "offline" ? (
+              <AlertCircle size={17} className="text-red-500" />
             ) : (
               <Upload size={17} className="text-gray-500" />
             )}
           </div>
           <div>
             <p className="text-sm font-medium">
-              {isAnalyzing ? "Processing..." : "Upload .xlsx file"}
+              {isAnalyzing ? "正在分析..." : "上传 .xlsx 审计文件"}
             </p>
             {!isAnalyzing && (
               <p className="text-xs text-gray-400">
-                Drag & drop or click to browse
+                {apiStatus === "offline"
+                  ? "后端连接恢复后即可上传"
+                  : "拖拽文件到此处，或点击选择文件"}
               </p>
             )}
           </div>

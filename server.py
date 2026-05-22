@@ -1,4 +1,6 @@
 from io import BytesIO
+from datetime import datetime, timezone
+from typing import Any
 
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File
@@ -15,12 +17,13 @@ STATE_FINAL_VERDICT = "STATE_FINAL_VERDICT"
 STATE_ROLLBACK_REVIEW = "STATE_ROLLBACK_REVIEW"
 
 CONSISTENCY_THRESHOLD = 0.80
+latest_audit_run: dict[str, Any] | None = None
 
 app = FastAPI(title="AuditCore API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -31,8 +34,17 @@ async def health():
     return {"status": "ok", "service": "AuditCore API"}
 
 
+@app.get("/api/audit/latest")
+async def get_latest_audit():
+    if latest_audit_run is None:
+        return {"error": "No audit file has been uploaded yet."}
+    return latest_audit_run
+
+
 @app.post("/api/audit")
 async def run_audit(file: UploadFile = File(...)):
+    global latest_audit_run
+
     if not file.filename or not file.filename.endswith(".xlsx"):
         return {"error": "Only .xlsx files are accepted"}
 
@@ -95,7 +107,7 @@ async def run_audit(file: UploadFile = File(...)):
 
     stats = scan_result["stats"]
 
-    return {
+    audit_result = {
         "global_consistency_score": round(global_consistency_score, 4),
         "current_state": current_state,
         "consistency_threshold": CONSISTENCY_THRESHOLD,
@@ -118,6 +130,14 @@ async def run_audit(file: UploadFile = File(...)):
         },
     }
 
+    latest_audit_run = {
+        "fileName": file.filename,
+        "uploadedAt": datetime.now(timezone.utc).isoformat(),
+        "auditData": audit_result,
+    }
+
+    return audit_result
+
 
 if __name__ == "__main__":
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("server:app", host="127.0.0.1", port=8000)
