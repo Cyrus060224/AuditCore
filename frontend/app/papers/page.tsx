@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -11,8 +13,7 @@ import {
   TriangleAlert,
   Upload,
 } from "lucide-react";
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "../i18n";
 
 interface AuditData {
   global_consistency_score: number;
@@ -54,10 +55,10 @@ type LoadState = "loading" | "ready" | "empty" | "error";
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_AUDIT_API_BASE_URL ?? "http://127.0.0.1:8000";
 
-function formatDateTime(value: string) {
+function formatDateTime(value: string, locale: string) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "未知时间";
-  return date.toLocaleString("zh-CN", {
+  if (Number.isNaN(date.getTime())) return locale === "zh" ? "未知时间" : "Unknown Time";
+  return date.toLocaleString(locale === "zh" ? "zh-CN" : "en-US", {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -66,19 +67,19 @@ function formatDateTime(value: string) {
   });
 }
 
-function getRiskLabel(data: AuditData) {
-  if (data.stats.anomaly_count >= 5) return "高风险";
-  if (data.stats.anomaly_count > 0) return "中风险";
-  return "低风险";
+function getRiskLabel(data: AuditData, t: any) {
+  if (data.stats.anomaly_count >= 5) return t("papers.risk.high");
+  if (data.stats.anomaly_count > 0) return t("papers.risk.medium");
+  return t("papers.risk.low");
 }
 
-function buildWorkingPaper(session: UploadedAuditSession) {
+function buildWorkingPaper(session: UploadedAuditSession, t: any, locale: string) {
   const { auditData, fileName, uploadedAt } = session;
   const findings = auditData.rule_findings;
   const activeFindings = findings.filter((finding) => finding.record_count > 0);
   const maxAmount =
     auditData.stats.max_amount == null
-      ? "未识别"
+      ? t("papers.risk.unidentified")
       : `¥${auditData.stats.max_amount.toLocaleString()}`;
 
   const findingLines =
@@ -86,10 +87,10 @@ function buildWorkingPaper(session: UploadedAuditSession) {
       ? findings
           .map(
             (finding) =>
-              `- ${finding.label}: ${finding.record_count} 条；${finding.summary}`
+              `- ${finding.label}: ${t("papers.findings.items", { count: finding.record_count })}；${finding.summary}`
           )
           .join("\n")
-      : "- 未生成规则发现。";
+      : `- ${t("papers.doc.emptyFindings")}`;
 
   const evidenceLines =
     auditData.graph.nodes.length > 0
@@ -101,58 +102,64 @@ function buildWorkingPaper(session: UploadedAuditSession) {
             (finding, index) =>
               `- rule_fact_${index + 1} / RuleFinding: ${finding.summary}`
           )
-          .join("\n") || "- 当前无异常证据节点。";
+          .join("\n") || `- ${t("papers.doc.emptyEvidence")}`;
 
   const conclusion =
     auditData.stats.anomaly_count > 0
-      ? "本次规则扫描发现异常记录，建议进入多 Agent 复核和凭证补证流程。"
-      : "本次规则扫描未发现异常记录，建议按常规流程归档，并保留抽样记录。";
+      ? t("papers.doc.conclusionPositive")
+      : t("papers.doc.conclusionNegative");
 
-  return `# 审计工作底稿
+  const nextActions =
+    auditData.stats.anomaly_count > 0
+      ? t("papers.doc.actionPositive")
+      : t("papers.doc.actionNegative");
 
-## 1. 审计对象
-- 文件名称: ${fileName}
-- 上传时间: ${formatDateTime(uploadedAt)}
-- 数据来源: AuditCore Excel 上传审计
+  return `# ${t("papers.doc.title")}
 
-## 2. 扫描概览
-- 总记录数: ${auditData.stats.total_records}
-- 异常记录数: ${auditData.stats.anomaly_count}
-- 最大金额: ${maxAmount}
-- 全局一致性评分: ${auditData.global_consistency_score.toFixed(2)}
-- 风险等级: ${getRiskLabel(auditData)}
+## ${t("papers.doc.section1")}
+- ${t("papers.doc.fileName")}: ${fileName}
+- ${t("papers.doc.uploadedAt")}: ${formatDateTime(uploadedAt, locale)}
+- ${t("papers.doc.source")}: ${t("papers.doc.sourceVal")}
 
-## 3. 规则发现
+## ${t("papers.doc.section2")}
+- ${t("papers.doc.scanned")}: ${auditData.stats.total_records}
+- ${t("papers.doc.anomalies")}: ${auditData.stats.anomaly_count}
+- ${t("papers.doc.exposure")}: ${maxAmount}
+- ${t("papers.doc.consistency")}: ${auditData.global_consistency_score.toFixed(2)}
+- ${t("papers.doc.riskLevel")}: ${getRiskLabel(auditData, t)}
+
+## ${t("papers.doc.section3")}
 ${findingLines}
 
-## 4. 证据节点
+## ${t("papers.doc.section4")}
 ${evidenceLines}
 
-## 5. 审计结论
+## ${t("papers.doc.section5")}
 ${conclusion}
 
-## 6. 下一步动作
-${
-  auditData.stats.anomaly_count > 0
-    ? "- 调取原始凭证、审批流和业务说明。\n- 将异常规则发现提交虚拟审计组进行质证和仲裁。\n- 对高金额或重复记录形成专项底稿附件。"
-    : "- 保存本次扫描记录。\n- 确认数据覆盖期间和字段映射完整性。\n- 按常规审计归档流程处理。"
-}
+## ${t("papers.doc.section6")}
+${nextActions}
 `;
 }
 
 export default function WorkingPapers() {
+  const { t, locale } = useTranslation();
   const [session, setSession] = useState<UploadedAuditSession | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
-  const [copyStatus, setCopyStatus] = useState("复制底稿");
+  const [copyStatus, setCopyStatus] = useState<string>("");
+
+  useEffect(() => {
+    setCopyStatus(t("papers.copyPaper"));
+  }, [t]);
 
   const workingPaper = useMemo(
-    () => (session ? buildWorkingPaper(session) : ""),
-    [session]
+    () => (session ? buildWorkingPaper(session, t, locale) : ""),
+    [session, t, locale]
   );
 
   async function loadLatestAudit() {
     setLoadState("loading");
-    setCopyStatus("复制底稿");
+    setCopyStatus(t("papers.copyPaper"));
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/audit/latest`);
@@ -209,9 +216,9 @@ export default function WorkingPapers() {
     if (!workingPaper) return;
     try {
       await navigator.clipboard.writeText(workingPaper);
-      setCopyStatus("已复制");
+      setCopyStatus(t("papers.copied"));
     } catch {
-      setCopyStatus("复制失败");
+      setCopyStatus(t("papers.copyFailed"));
     }
   }
 
@@ -236,9 +243,9 @@ export default function WorkingPapers() {
     return (
       <StateMessage
         icon={TriangleAlert}
-        title="无法连接后端"
-        description={`请确认 AuditCore API 已在 ${API_BASE_URL} 启动，然后重新加载底稿。`}
-        actionLabel="重新加载"
+        title={t("papers.error.title")}
+        description={t("papers.error.desc", { url: API_BASE_URL })}
+        actionLabel={t("papers.error.btn")}
         onAction={loadLatestAudit}
       />
     );
@@ -248,14 +255,14 @@ export default function WorkingPapers() {
     return (
       <StateMessage
         icon={RefreshCw}
-        title="正在读取最新审计结果"
-        description="系统正在从后端获取最近一次上传文件的扫描结果。"
+        title={t("papers.loading.title")}
+        description={t("papers.loading.desc")}
       />
     );
   }
 
   const auditData = session.auditData;
-  const riskLabel = getRiskLabel(auditData);
+  const riskLabel = getRiskLabel(auditData, t);
 
   return (
     <div className="animate-fade-in stagger-1">
@@ -265,7 +272,7 @@ export default function WorkingPapers() {
           className="inline-flex items-center gap-1.5 text-sm text-gray-400 transition-colors hover:text-gray-700"
         >
           <ArrowLeft size={14} />
-          返回控制台
+          {t("papers.back")}
         </Link>
       </div>
 
@@ -273,66 +280,66 @@ export default function WorkingPapers() {
         <div>
           <div className="mb-3 inline-flex items-center gap-2 rounded-lg bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-500">
             <FileText size={13} />
-            审计工作底稿
+            {t("papers.title")}
           </div>
           <h1 className="text-2xl font-semibold tracking-tight text-gray-950">
             {session.fileName}
           </h1>
           <p className="mt-3 max-w-3xl text-sm leading-6 text-gray-500">
-            基于最近一次上传文件自动生成底稿摘要，包含扫描概览、规则发现、证据节点和下一步审计动作。
+            {t("papers.subtitle")}
           </p>
           <p className="mt-2 text-xs text-gray-400">
-            上传时间：{formatDateTime(session.uploadedAt)}
+            {t("papers.uploadedAt", { time: formatDateTime(session.uploadedAt, locale) })}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={loadLatestAudit}
-            className="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-200 px-3.5 text-sm font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50"
+            className="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-200 px-3.5 text-sm font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50 cursor-pointer"
           >
             <RefreshCw size={15} />
-            刷新
+            {t("papers.refresh")}
           </button>
           <button
             type="button"
             onClick={copyWorkingPaper}
-            className="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-200 px-3.5 text-sm font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50"
+            className="inline-flex h-10 items-center gap-2 rounded-lg border border-gray-200 px-3.5 text-sm font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50 cursor-pointer"
           >
             <Clipboard size={15} />
-            {copyStatus}
+            {copyStatus || t("papers.copyPaper")}
           </button>
           <button
             type="button"
             onClick={downloadWorkingPaper}
-            className="inline-flex h-10 items-center gap-2 rounded-lg bg-gray-950 px-3.5 text-sm font-medium text-white transition-colors hover:bg-gray-800"
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-gray-950 px-3.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 cursor-pointer"
           >
             <Download size={15} />
-            下载 Markdown
+            {t("papers.downloadMd")}
           </button>
         </div>
       </header>
 
       <div className="mb-8 grid gap-6 sm:grid-cols-4">
-        <Metric label="总记录数" value={String(auditData.stats.total_records)} />
-        <Metric label="异常记录" value={String(auditData.stats.anomaly_count)} />
+        <Metric label={t("papers.metrics.scanned")} value={String(auditData.stats.total_records)} />
+        <Metric label={t("papers.metrics.anomalies")} value={String(auditData.stats.anomaly_count)} />
         <Metric
-          label="最大金额"
+          label={t("papers.metrics.exposure")}
           value={
             auditData.stats.max_amount == null
-              ? "未识别"
+              ? t("papers.risk.unidentified")
               : `¥${auditData.stats.max_amount.toLocaleString()}`
           }
         />
-        <Metric label="风险等级" value={riskLabel} />
+        <Metric label={t("papers.metrics.riskLevel")} value={riskLabel} />
       </div>
 
       <main className="grid gap-8 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
         <section>
-          <SectionTitle title="规则发现" description="来自当前上传文件的实时规则扫描结果。" />
+          <SectionTitle title={t("papers.findings.title")} description={t("papers.findings.desc")} />
           <div className="space-y-3">
             {auditData.rule_findings.map((finding) => (
-              <div key={finding.label} className="rounded-lg border border-gray-100 px-4 py-3">
+              <div key={finding.label} className="rounded-lg border border-gray-100 px-4 py-3 bg-white">
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <h2 className="text-sm font-semibold text-gray-950">
@@ -349,7 +356,7 @@ export default function WorkingPapers() {
                         : "bg-emerald-50 text-emerald-700"
                     }`}
                   >
-                    {finding.record_count} 条
+                    {t("papers.findings.items", { count: finding.record_count })}
                   </span>
                 </div>
               </div>
@@ -357,14 +364,14 @@ export default function WorkingPapers() {
           </div>
 
           <SectionTitle
-            title="证据节点"
-            description="底稿中保留的规则事实节点，后续可连接多 Agent 质证关系。"
+            title={t("papers.evidence.title")}
+            description={t("papers.evidence.desc")}
             className="mt-8"
           />
           <div className="space-y-3">
             {auditData.graph.nodes.length > 0 ? (
               auditData.graph.nodes.map((node) => (
-                <div key={node.node_id} className="rounded-lg border border-gray-100 px-4 py-3">
+                <div key={node.node_id} className="rounded-lg border border-gray-100 px-4 py-3 bg-white">
                   <div className="flex items-center justify-between gap-3">
                     <span className="font-mono text-xs text-gray-400">
                       {node.node_id}
@@ -379,16 +386,16 @@ export default function WorkingPapers() {
                 </div>
               ))
             ) : (
-              <p className="rounded-lg border border-gray-100 px-4 py-3 text-sm text-gray-400">
-                当前扫描没有生成证据节点。
+              <p className="rounded-lg border border-gray-100 px-4 py-3 text-sm text-gray-400 bg-white">
+                {t("papers.evidence.empty")}
               </p>
             )}
           </div>
         </section>
 
         <section>
-          <SectionTitle title="Markdown 底稿预览" description="可直接复制或下载，用作专利演示和审计归档材料。" />
-          <pre className="max-h-[680px] whitespace-pre-wrap break-words overflow-auto rounded-lg border border-gray-100 bg-gray-50 p-5 text-xs leading-6 text-gray-700">
+          <SectionTitle title={t("papers.preview.title")} description={t("papers.preview.desc")} />
+          <pre className="max-h-[680px] whitespace-pre-wrap break-words overflow-auto rounded-lg border border-gray-100 bg-gray-50 p-5 text-xs leading-6 text-gray-700 font-mono">
             {workingPaper}
           </pre>
         </section>
@@ -398,12 +405,13 @@ export default function WorkingPapers() {
 }
 
 function EmptyPapers() {
+  const { t } = useTranslation();
   return (
     <StateMessage
       icon={Upload}
-      title="请先上传审计文件"
-      description="工作底稿页会读取最近一次 Excel 上传结果，并自动生成可复制、可下载的 Markdown 底稿。"
-      actionLabel="返回上传"
+      title={t("papers.empty.title")}
+      description={t("papers.empty.desc")}
+      actionLabel={t("papers.empty.btn")}
       actionHref="/"
     />
   );
@@ -424,8 +432,9 @@ function StateMessage({
   actionHref?: string;
   onAction?: () => void;
 }) {
+  const { t } = useTranslation();
   const actionClass =
-    "mt-7 inline-flex h-10 items-center gap-2 rounded-lg border border-gray-200 px-3.5 text-sm font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50";
+    "mt-7 inline-flex h-10 items-center gap-2 rounded-lg border border-gray-200 px-3.5 text-sm font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50 cursor-pointer";
 
   return (
     <div className="animate-fade-in stagger-1">
@@ -435,7 +444,7 @@ function StateMessage({
           className="inline-flex items-center gap-1.5 text-sm text-gray-400 transition-colors hover:text-gray-700"
         >
           <ArrowLeft size={14} />
-          返回控制台
+          {t("papers.back")}
         </Link>
       </div>
       <div className="flex min-h-[56vh] flex-col items-center justify-center text-center">

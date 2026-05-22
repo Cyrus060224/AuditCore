@@ -3,15 +3,17 @@
 import { Bot, FileText, LayoutDashboard } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useTranslation } from "./i18n";
 
 const navItems = [
-  { href: "/", label: "Console", icon: LayoutDashboard },
-  { href: "/arena", label: "Agent Arena", icon: Bot },
-  { href: "/papers", label: "Working Papers", icon: FileText },
+  { href: "/", translationKey: "nav.console", icon: LayoutDashboard },
+  { href: "/arena", translationKey: "nav.arena", icon: Bot },
+  { href: "/papers", translationKey: "nav.papers", icon: FileText },
 ];
 
 export default function SidebarNav() {
   const pathname = usePathname();
+  const { t } = useTranslation();
 
   return (
     <nav className="flex flex-1 flex-col gap-0.5 px-3 py-2">
@@ -32,10 +34,11 @@ export default function SidebarNav() {
             }`}
           >
             <Icon size={15} strokeWidth={1.75} />
-            {item.label}
+            {t(item.translationKey)}
           </Link>
         );
       })}
     </nav>
   );
 }
+

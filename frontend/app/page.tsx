@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useState, useCallback, useEffect } from "react";
+import { useTranslation } from "./i18n";
 
 interface AuditData {
   global_consistency_score: number;
@@ -65,6 +66,7 @@ const LATEST_AUDIT_STORAGE_KEY = "auditcore.latestAuditRun";
 type ApiStatus = "checking" | "online" | "offline";
 
 export default function Dashboard() {
+  const { t } = useTranslation();
   const [auditData, setAuditData] = useState<AuditData>(MOCK_DATA);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -110,7 +112,7 @@ export default function Dashboard() {
 
   const handleFileUpload = useCallback(async (file: File) => {
     if (!file.name.endsWith(".xlsx")) {
-      setError("请上传 .xlsx 格式的审计数据文件。");
+      setError(t("console.upload.formatError"));
       return;
     }
 
@@ -147,17 +149,17 @@ export default function Dashboard() {
     } catch (err) {
       const msg =
         err instanceof TypeError
-          ? `后端服务未连接。请确认 AuditCore API 已在 ${API_BASE_URL} 启动。`
+          ? t("console.upload.backendError", { url: API_BASE_URL })
           : err instanceof Error
           ? err.message
-          : "上传失败，请检查文件内容或后端服务状态。";
+          : t("console.upload.genericError");
       setError(msg);
       checkApiStatus();
       setAuditData(MOCK_DATA);
     } finally {
       setIsAnalyzing(false);
     }
-  }, [checkApiStatus]);
+  }, [checkApiStatus, t]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -190,20 +192,20 @@ export default function Dashboard() {
       {/* Page title */}
       <div className="mb-12 flex flex-col gap-5 animate-fade-in stagger-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Audit Console
+          <h1 className="text-2xl font-semibold tracking-tight text-gray-905">
+            {t("console.title")}
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-400">
-            上传审计数据完成规则穿透扫描，并进入虚拟审计组查看多 Agent 质证与仲裁链路。
+            {t("console.subtitle")}
           </p>
           <ApiStatusLine status={apiStatus} onRefresh={checkApiStatus} />
         </div>
         <Link
           href="/arena"
-          className="inline-flex h-10 w-fit items-center gap-2 rounded-lg border border-gray-200 px-3.5 text-sm font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50"
+          className="inline-flex h-10 w-fit items-center gap-2 rounded-lg border border-gray-200 px-3.5 text-sm font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50 cursor-pointer"
         >
           <Bot size={16} />
-          虚拟审计组
+          {t("console.arenaBtn")}
           <ArrowRight size={15} />
         </Link>
       </div>
@@ -213,25 +215,25 @@ export default function Dashboard() {
         <div className="mb-8 animate-fade-in stagger-2">
           <div className="grid grid-cols-4 gap-8">
             <MetricValue
-              label="Consistency"
+              label={t("console.metrics.consistency")}
               value={score.toFixed(2)}
               status={score >= 0.8 ? "good" : "warning"}
               delay={1}
             />
             <MetricValue
-              label="Scanned"
+              label={t("console.metrics.scanned")}
               value={String(totalRecords)}
-              subtitle="records"
+              subtitle={t("console.metrics.records")}
               delay={2}
             />
             <MetricValue
-              label="Anomalies"
+              label={t("console.metrics.anomalies")}
               value={String(anomalyCount)}
               status={anomalyCount > 0 ? "warning" : "good"}
               delay={3}
             />
             <MetricValue
-              label="Exposure"
+              label={t("console.metrics.exposure")}
               value={maxAmount != null ? `¥${maxAmount.toLocaleString()}` : "—"}
               delay={4}
             />
@@ -303,7 +305,7 @@ function MetricValue({
           {label}
         </span>
       </div>
-      <div className="mt-1.5 text-3xl font-semibold tracking-tight">
+      <div className="mt-1.5 text-3xl font-semibold tracking-tight text-gray-900">
         {value}
       </div>
       {subtitle && (
@@ -322,12 +324,13 @@ function ApiStatusLine({
   status: ApiStatus;
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation();
   const statusText =
     status === "online"
-      ? "后端已连接"
+      ? t("console.api.connected")
       : status === "checking"
-      ? "正在检查后端连接"
-      : "后端未连接";
+      ? t("console.api.checking")
+      : t("console.api.disconnected");
   const dotColor =
     status === "online"
       ? "bg-emerald-500"
@@ -346,9 +349,9 @@ function ApiStatusLine({
       <button
         type="button"
         onClick={onRefresh}
-        className="rounded-md px-1.5 py-0.5 font-medium text-gray-500 transition-colors hover:bg-gray-50 hover:text-gray-800"
+        className="rounded-md px-1.5 py-0.5 font-medium text-gray-500 transition-colors hover:bg-gray-50 hover:text-gray-800 cursor-pointer"
       >
-        重新检查
+        {t("console.api.recheck")}
       </button>
     </div>
   );
@@ -365,12 +368,13 @@ function Verdict({
   score: number;
   threshold: number;
 }) {
+  const { t } = useTranslation();
   if (isVerdict) {
     return (
       <div className="flex items-center gap-2.5">
         <CheckCircle2 size={15} className="text-emerald-500" />
         <span className="text-sm text-gray-700">
-          Audit passed — all checks cleared
+          {t("console.verdict.passed")}
         </span>
       </div>
     );
@@ -381,10 +385,10 @@ function Verdict({
       <AlertCircle size={15} className="mt-0.5 text-red-500" />
       <div>
         <p className="text-sm font-medium text-red-600">
-          Score {score.toFixed(2)} below threshold
+          {t("console.verdict.failed", { score: score.toFixed(2) })}
         </p>
         <p className="mt-0.5 text-xs text-red-400">
-          Regressed to review stage · threshold {threshold}
+          {t("console.verdict.regressed", { threshold })}
         </p>
       </div>
     </div>
@@ -412,6 +416,7 @@ function UploadSection({
   onDragOver: (e: React.DragEvent) => void;
   onDragLeave: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div>
       <div
@@ -448,14 +453,14 @@ function UploadSection({
             )}
           </div>
           <div>
-            <p className="text-sm font-medium">
-              {isAnalyzing ? "正在分析..." : "上传 .xlsx 审计文件"}
+            <p className="text-sm font-medium text-gray-900">
+              {isAnalyzing ? t("console.upload.analyzing") : t("console.upload.uploadXlsx")}
             </p>
             {!isAnalyzing && (
               <p className="text-xs text-gray-400">
                 {apiStatus === "offline"
-                  ? "后端连接恢复后即可上传"
-                  : "拖拽文件到此处，或点击选择文件"}
+                  ? t("console.upload.offlineTip")
+                  : t("console.upload.dragTip")}
               </p>
             )}
           </div>
@@ -492,26 +497,27 @@ function DataTable({
     summary: string;
   }>;
 }) {
+  const { t } = useTranslation();
   if (findings.length === 0) return null;
 
   return (
     <div>
       <p className="mb-4 text-[11px] font-medium uppercase tracking-wider text-gray-400">
-        Findings ({findings.length})
+        {t("console.table.findings", { count: findings.length })}
       </p>
-      <div className="overflow-hidden rounded-xl border border-gray-100">
+      <div className="overflow-hidden rounded-xl border border-gray-100 bg-white">
         <table className="w-full text-left text-sm">
           <thead>
             <tr className="border-b border-gray-100 text-[11px] font-medium uppercase tracking-wider text-gray-400">
-              <th className="px-5 py-3">Rule</th>
-              <th className="px-5 py-3">Records</th>
-              <th className="px-5 py-3">Summary</th>
-              <th className="px-5 py-3 text-right">Severity</th>
+              <th className="px-5 py-3">{t("console.table.rule")}</th>
+              <th className="px-5 py-3">{t("console.table.records")}</th>
+              <th className="px-5 py-3">{t("console.table.summary")}</th>
+              <th className="px-5 py-3 text-right">{t("console.table.severity")}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
             {findings.map((f, i) => (
-              <tr key={i} className="text-sm">
+              <tr key={i} className="text-sm text-gray-900">
                 <td className="px-5 py-3 font-mono text-xs text-gray-500">
                   {f.label}
                 </td>
@@ -536,7 +542,7 @@ function DataTable({
                           : "bg-gray-400"
                       }`}
                     />
-                    {f.record_count >= 2 ? "High" : "Low"}
+                    {f.record_count >= 2 ? t("console.table.high") : t("console.table.low")}
                   </span>
                 </td>
               </tr>
@@ -547,3 +553,4 @@ function DataTable({
     </div>
   );
 }
+
