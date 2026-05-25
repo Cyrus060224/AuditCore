@@ -7,6 +7,7 @@
 """
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 
@@ -36,6 +37,96 @@ def _clamp_unit_score(value: Any, default: float) -> float:
     if score > 1.0:
         return 1.0
     return score
+
+
+# ── 冲突类型枚举（权利要求6） ──
+
+
+class ConflictType(str, Enum):
+    """证据冲突分类，对应权利要求6中的三种冲突形式。"""
+
+    NUMERICAL = "numerical"   # 数值冲突：金额/比率不一致
+    LOGICAL = "logical"       # 逻辑冲突：结论互斥
+    TEMPORAL = "temporal"     # 时间冲突：时序矛盾
+
+
+# ── Agent 统一输出契约 ──
+
+
+@dataclass
+class AgentResult:
+    """
+    各 Agent 的标准化输出包装器。
+
+    所有 Agent（规则穿透、初审、复核、事实核查、高级合伙人）
+    均通过此结构向编排器返回结果，消除对原始 JSON 字符串的直接依赖。
+    """
+
+    agent_id: str
+    status: str  # "success" | "failed" | "skipped"
+    output: dict[str, Any] = field(default_factory=dict)
+    evidence_node_ids: list[str] = field(default_factory=list)
+    confidence: float = 1.0
+    timestamp: str = ""
+
+
+# ── DAG 状态机契约 ──
+
+
+@dataclass
+class TransitionCondition:
+    """
+    状态转移条件（权利要求10）。
+
+    当一致性评分满足阈值要求或改善幅度达标时，状态机放行至下一节点。
+    """
+
+    score_threshold: float = 0.80
+    improvement_required: bool = False
+    max_retries: int = 3
+    on_failure_target: str = ""
+
+
+@dataclass
+class StateMachineNode:
+    """
+    DAG 状态机节点定义。
+
+    对应专利中的"结构化工作流定义文件"，
+    描述节点类型、状态转移条件及任务依赖关系。
+    """
+
+    node_id: str
+    state_name: str
+    agent_id: str
+    dependencies: list[str] = field(default_factory=list)
+    transition_condition: TransitionCondition = field(default_factory=TransitionCondition)
+
+
+# ── 流水线顶层结果 ──
+
+
+@dataclass
+class AuditPipelineResult:
+    """
+    编排器 run_pipeline() 的完整返回结构。
+
+    包含全局/局部一致性评分、状态历史、各 Agent 输出、
+    证据图快照及最终工作底稿。
+    """
+
+    global_consistency_score: float = 1.0
+    local_subgraph_scores: dict[str, float] = field(default_factory=dict)
+    current_state: str = "STATE_INIT"
+    state_history: list[dict[str, Any]] = field(default_factory=list)
+    agent_results: list[AgentResult] = field(default_factory=list)
+    evidence_graph_snapshot: dict[str, Any] = field(default_factory=dict)
+    workpaper_markdown: str = ""
+    rollback_count: int = 0
+    consistency_threshold: float = 0.80
+    stats: dict[str, Any] = field(default_factory=dict)
+    rule_findings: list[dict[str, Any]] = field(default_factory=list)
+    privacy_log: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -142,6 +233,8 @@ class EvidenceNode:
     node_type: str
     content: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    subgraph_id: str = ""
+    confidence: float = 1.0
 
 
 @dataclass

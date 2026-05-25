@@ -1,48 +1,22 @@
 # -*- coding: utf-8 -*-
 """
 高级合伙人 Agent 引擎。
-接收初级审计员和反方复核的结论，做最终仲裁裁决，输出结构化 JSON。
-支持 BYOK 多模型路由：Ollama / DeepSeek / OpenAI。
+继承 BaseLLMAgent，接收初审和复核结论，做最终仲裁裁决。
 """
 
-from openai import OpenAI
+from __future__ import annotations
+
+from agents.base_agent import BaseLLMAgent
+from core.contracts import AgentResult
 
 
-class SeniorPartnerAgent:
-    """
-    高级合伙人 Agent。
-    综合初级审计员（Junior）的发现和反方（Challenger）的质疑，
-    做出最终裁决，指定下一步具体行动。
-    """
+class SeniorPartnerAgent(BaseLLMAgent):
+    """高级合伙人 Agent，综合两方意见做出最终裁决。"""
 
     def __init__(self, lang: str = "English", api_key: str = "", api_base: str = ""):
-        """
-        初始化 LLM 客户端，由 app.py 侧边栏的路由配置驱动。
+        super().__init__(agent_id="senior_partner_agent", lang=lang, api_key=api_key, api_base=api_base)
 
-        Args:
-            lang: 界面语言，"English" 或 "中文"，控制大模型输出语言。
-            api_key: 从 session_state 传入的 API Key。
-            api_base: 从 session_state 传入的目标接口地址。
-
-        Raises:
-            RuntimeError: API Key 为空时抛出。
-        """
-        self.lang = lang
-        self.api_key = api_key
-        self.api_base = api_base
-        self.model = "llama3:8b" if "localhost" in api_base else "gpt-4o-mini"
-
-        print("-" * 40)
-        print(f"[Senior Partner] 目标接口: {self.api_base}")
-        print(f"[Senior Partner] 使用模型: {self.model}")
-        print("-" * 40)
-
-        if not self.api_key:
-            raise RuntimeError("API Key is empty. Please configure it in the sidebar.")
-
-        self.client = OpenAI(api_key=self.api_key, base_url=self.api_base)
-
-    def generate_verdict(
+    def run(
         self,
         total_records: int,
         anomaly_count: int,
@@ -50,24 +24,8 @@ class SeniorPartnerAgent:
         junior_score: int,
         challenger_rebuttal: str,
         challenger_score: int,
-    ) -> str:
-        """
-        核心逻辑：接收两方报告和风险评分，做出最终仲裁。
-
-        Args:
-            total_records: 总记录数。
-            anomaly_count: 异常总数。
-            junior_report: 初级审计员的分析文本。
-            junior_score: 初级审计员风险评分 (0-100)。
-            challenger_rebuttal: 反方的复核意见文本。
-            challenger_score: 反方调整后的风险评分 (0-100)。
-
-        Returns:
-            JSON 字符串，包含 final_verdict、final_risk_score、reasoning、action_item。
-
-        Raises:
-            RuntimeError: API 调用失败时抛出。
-        """
+    ) -> AgentResult:
+        """执行最终仲裁，返回标准化 AgentResult。"""
         system_prompt = (
             "You are a highly experienced Audit Partner. You will receive an anomaly "
             "finding from a Junior Auditor and a rebuttal from a Challenger Auditor. "
@@ -78,7 +36,7 @@ class SeniorPartnerAgent:
             '- "final_verdict": must be exactly "True Anomaly" or "False Positive" (string),\n'
             '- "final_risk_score": an integer from 0 to 100 (integer),\n'
             '- "reasoning": your final decision rationale, referencing both sides\' arguments (string),\n'
-            '- "action_item": a concrete, actionable next step, e.g. "Request original invoices" (string).\n'
+            '- "action_item": a concrete, actionable next step (string).\n'
             'Example: {"final_verdict": "True Anomaly", "final_risk_score": 75, "reasoning": "...", "action_item": "..."}'
         )
 
@@ -102,20 +60,33 @@ class SeniorPartnerAgent:
             f"Based on both reports above, deliver your final partner verdict as a JSON object."
         )
 
-        print(f"[Senior Partner] 正在向模型 '{self.model}' 发送最终仲裁请求...")
-
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.3,
-                max_tokens=1024,
-                response_format={"type": "json_object"},
+            raw = self._call_llm(system_prompt, user_prompt, temperature=0.3, max_tokens=1024)
+            output = self._parse_json_response(raw)
+            final_score = output.get("final_risk_score", 50)
+            confidence = max(0.5, min(1.0, (100 - abs(final_score - 50)) / 80))
+            return self._make_result(
+                status="success",
+                output=output,
+                evidence_node_ids=["senior_partner_verdict"],
+                confidence=confidence,
             )
-            print("[Senior Partner] 最终裁决生成成功！")
-            return response.choices[0].message.content
         except Exception as e:
-            raise RuntimeError(f"Senior Partner API call failed: {e}")
+            return self._make_result(status="failed", output={"error": str(e)})
+
+    # 向后兼容旧接口
+    def generate_verdict(
+        self,
+        total_records: int,
+        anomaly_count: int,
+        junior_report: str,
+        junior_score: int,
+        challenger_rebuttal: str,
+        challenger_score: int,
+    ) -> str:
+        result = self.run(
+            total_records, anomaly_count, junior_report, junior_score,
+            challenger_rebuttal, challenger_score
+        )
+        import json
+        return json.dumps(result.output)

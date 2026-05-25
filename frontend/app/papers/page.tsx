@@ -55,9 +55,9 @@ type LoadState = "loading" | "ready" | "empty" | "error";
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_AUDIT_API_BASE_URL ?? "http://127.0.0.1:8000";
 
-function formatDateTime(value: string, locale: string) {
+function formatDateTime(value: string, locale: string, t: any) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return locale === "zh" ? "未知时间" : "Unknown Time";
+  if (Number.isNaN(date.getTime())) return t("papers.unknownTime");
   return date.toLocaleString(locale === "zh" ? "zh-CN" : "en-US", {
     year: "numeric",
     month: "2-digit",
@@ -118,7 +118,7 @@ function buildWorkingPaper(session: UploadedAuditSession, t: any, locale: string
 
 ## ${t("papers.doc.section1")}
 - ${t("papers.doc.fileName")}: ${fileName}
-- ${t("papers.doc.uploadedAt")}: ${formatDateTime(uploadedAt, locale)}
+- ${t("papers.doc.uploadedAt")}: ${formatDateTime(uploadedAt, locale, t)}
 - ${t("papers.doc.source")}: ${t("papers.doc.sourceVal")}
 
 ## ${t("papers.doc.section2")}
@@ -289,7 +289,7 @@ export default function WorkingPapers() {
             {t("papers.subtitle")}
           </p>
           <p className="mt-2 text-xs text-gray-400">
-            {t("papers.uploadedAt", { time: formatDateTime(session.uploadedAt, locale) })}
+            {t("papers.uploadedAt", { time: formatDateTime(session.uploadedAt, locale, t) })}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">

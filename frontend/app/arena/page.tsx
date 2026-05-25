@@ -169,9 +169,9 @@ function clampScore(value: number) {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
-function formatDateTime(value: string, locale: string) {
+function formatDateTime(value: string, locale: string, t: any) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return locale === "zh" ? "未知时间" : "Unknown Time";
+  if (Number.isNaN(date.getTime())) return t("arena.dynamic.unknownTime");
   return date.toLocaleString(locale === "zh" ? "zh-CN" : "en-US", {
     month: "2-digit",
     day: "2-digit",
@@ -208,15 +208,15 @@ function buildCouncilRun(session: UploadedAuditSession, t: any, locale: string):
   const finalRisk = clampScore(baseRisk * 0.55 + challengeRisk * 0.25 + supportScore * 20 - conflictScore * 10);
   const finalVerdict = finalRisk >= 45 ? "True Anomaly" : "False Positive";
   const riskLevel = getRiskLevel(finalRisk, t);
-  const unit = locale === "zh" ? "条" : "records";
-  const divider = locale === "zh" ? "、" : ", ";
+  const unit = t("arena.dynamic.unit");
+  const divider = t("arena.dynamic.separator");
   
   const findingText =
     activeFindings.length > 0
       ? activeFindings.map((finding) => `${finding.label} ${finding.record_count} ${unit}`).join(divider)
       : t("arena.dynamic.noFindings");
   const title = primaryFinding
-    ? `${primaryFinding.label} ${locale === "zh" ? "规则复核" : "Rule Review"}`
+    ? `${primaryFinding.label} ${t("arena.dynamic.ruleReview")}`
     : t("arena.dynamic.noAnomaliesTitle");
   const sourceSummary = hasAnomalies
     ? t("arena.dynamic.sourceSummaryAnomalies", { file: fileName, total: totalRecords.toLocaleString(), anomaly: anomalyCount.toLocaleString(), finding: findingText })
@@ -236,13 +236,13 @@ function buildCouncilRun(session: UploadedAuditSession, t: any, locale: string):
     {
       node_id: "scan_stats",
       node_type: "AuditStats",
-      title: locale === "zh" ? "扫描统计" : "Scan Stats",
+      title: t("arena.dynamic.scanStats"),
       content: t("arena.dynamic.scanStatsContent", { total: totalRecords.toLocaleString(), anomaly: anomalyCount.toLocaleString(), max: maxAmountStr }),
     },
     {
       node_id: "privacy_01",
       node_type: "PrivacyGuard",
-      title: locale === "zh" ? "展示层脱敏" : "Presentation Layer Anonymization",
+      title: t("arena.dynamic.privacyAnonymization"),
       content: t("arena.dynamic.privacyGuardContent"),
     },
   ];
@@ -322,7 +322,7 @@ function buildCouncilRun(session: UploadedAuditSession, t: any, locale: string):
       anomaly_count: anomalyCount,
       exposure_amount: maxAmount,
       consistency_score: auditData.global_consistency_score,
-      privacy_status: t("arena.loop.privacy") + " " + (locale === "zh" ? "已启用" : "Enabled"),
+      privacy_status: t("arena.loop.privacy") + " " + t("arena.dynamic.enabled"),
     },
     agents: [
       {
@@ -427,6 +427,117 @@ function buildCouncilRun(session: UploadedAuditSession, t: any, locale: string):
   };
 }
 
+function buildCouncilRunFromArena(payload: any, t: any, locale: string): AuditCouncilRun | null {
+  if (!payload || !payload.caseId || !payload.agents) return null;
+
+  const AGENT_ICON_MAP: Record<string, typeof Bot> = {
+    junior: FileSearch,
+    challenger: MessageSquareWarning,
+    factCheck: ShieldCheck,
+    partner: Gavel,
+  };
+
+  const AGENT_RESPONSIBILITY_KEYS: Record<string, string> = {
+    junior: "arena.agentRoles.junior.responsibility",
+    challenger: "arena.agentRoles.challenger.responsibility",
+    factCheck: "arena.agentRoles.factCheck.responsibility",
+    partner: "arena.agentRoles.partner.responsibility",
+  };
+
+  const AGENT_SCORE_LABEL_KEYS: Record<string, string> = {
+    junior: "arena.agentRoles.junior.scoreLabel",
+    challenger: "arena.agentRoles.challenger.scoreLabel",
+    factCheck: "arena.agentRoles.factCheck.scoreLabel",
+    partner: "arena.agentRoles.partner.scoreLabel",
+  };
+
+  const agents: AuditCouncilAgent[] = (payload.agents as any[]).map((agent) => {
+    const role = agent.id as AgentRole;
+    const output = agent.output ?? {};
+
+    let scoreValue = "";
+    if (role === "junior") {
+      scoreValue = `${output.risk_score ?? 50}/100`;
+    } else if (role === "challenger") {
+      scoreValue = `${output.adjusted_risk_score ?? 50}/100`;
+    } else if (role === "factCheck") {
+      scoreValue = `${(output.support_score ?? 0).toFixed(2)} / ${(output.conflict_score ?? 0).toFixed(2)}`;
+    } else if (role === "partner") {
+      scoreValue = `${output.final_risk_score ?? 0}/100`;
+    }
+
+    return {
+      id: role,
+      title: agent.title ?? role,
+      responsibility: t(AGENT_RESPONSIBILITY_KEYS[role] ?? "arena.output.empty"),
+      status: agent.status === "success" ? t("arena.agentStatus.completed") : agent.status,
+      icon: AGENT_ICON_MAP[role] ?? Bot,
+      scoreLabel: t(AGENT_SCORE_LABEL_KEYS[role] ?? "arena.output.empty"),
+      scoreValue,
+      summary: output.analysis ?? output.rebuttal ?? output.reasoning ?? t("arena.output.empty"),
+      output,
+    };
+  });
+
+  const timeline: CouncilTimelineItem[] = (payload.timeline as any[]).map((item, index) => ({
+    stage: item.stage ?? String(index + 1).padStart(2, "0"),
+    title: item.title ?? item.to ?? "",
+    description: item.description ?? item.reason ?? "",
+    owner: agents[index % agents.length]?.title ?? "",
+  }));
+
+  const nodes: EvidenceNode[] = ((payload.evidence?.nodes ?? []) as any[]).map((node) => ({
+    node_id: node.node_id,
+    node_type: node.node_type,
+    title: node.node_type === "RuleFinding"
+      ? node.content?.split("。")[0] ?? node.node_id
+      : node.node_id,
+    content: node.content ?? "",
+  }));
+
+  const edges: EvidenceEdge[] = ((payload.evidence?.edges ?? []) as any[]).map((edge) => ({
+    source_id: edge.source_id,
+    target_id: edge.target_id,
+    relation: (["support", "conflict", "security"].includes(edge.relation) ? edge.relation : "support") as EvidenceRelation,
+    weight: edge.weight ?? 0.5,
+    rationale: `${edge.source_id} → ${edge.target_id} (${edge.relation}, weight=${(edge.weight ?? 0).toFixed(2)})`,
+  }));
+
+  const fd = payload.finalDecision ?? {};
+  const finalRisk = fd.final_risk_score ?? 0;
+  const finalVerdict: "True Anomaly" | "False Positive" = fd.final_verdict === "True Anomaly" ? "True Anomaly" : "False Positive";
+
+  const metrics = payload.metrics ?? {};
+  const sourceSummary = t("arena.dynamic.backendPipelineSummary", { total: metrics.total_records ?? 0, score: (metrics.consistency_score ?? 0).toFixed(2) });
+
+  return {
+    caseId: payload.caseId,
+    title: t("arena.dynamic.multiAgentTitle"),
+    scenario: t("arena.dynamic.backendPipeline"),
+    source: "uploaded",
+    fileName: payload.fileName ?? "",
+    uploadedAt: payload.uploadedAt ?? new Date().toISOString(),
+    sourceSummary,
+    metrics: {
+      total_records: metrics.total_records ?? 0,
+      anomaly_count: metrics.anomaly_count ?? 0,
+      exposure_amount: metrics.exposure_amount ?? 0,
+      consistency_score: metrics.consistency_score ?? 0,
+      privacy_status: t("arena.loop.privacy") + " " + t("arena.dynamic.enabled"),
+    },
+    agents,
+    timeline,
+    evidence: { nodes, edges },
+    finalDecision: {
+      final_verdict: finalVerdict,
+      riskLevel: getRiskLevel(finalRisk, t),
+      final_risk_score: finalRisk,
+      reasoning: fd.reasoning ?? "",
+      action_item: fd.action_item ?? "",
+    },
+  };
+}
+
 function readLatestAuditRun(t: any, locale: string): AuditCouncilRun | null {
   try {
     const raw = window.localStorage.getItem(LATEST_AUDIT_STORAGE_KEY);
@@ -453,6 +564,23 @@ export default function AgentArena() {
     let cancelled = false;
 
     async function loadLatestAuditRun() {
+      try {
+        // 优先从后端 arena 端点获取真实 Agent 数据
+        const arenaResponse = await fetch(`${API_BASE_URL}/api/audit/latest/arena`);
+        if (arenaResponse.ok) {
+          const arenaPayload = await arenaResponse.json();
+          if (!cancelled && !("error" in arenaPayload)) {
+            const run = buildCouncilRunFromArena(arenaPayload, t, locale);
+            if (run) {
+              setCouncilRun(run);
+              return;
+            }
+          }
+        }
+      } catch {
+        // arena 端点不可用，回退到旧逻辑
+      }
+
       try {
         const response = await fetch(`${API_BASE_URL}/api/audit/latest`);
         const payload = await response.json();
@@ -520,7 +648,7 @@ export default function AgentArena() {
             {councilRun.sourceSummary}
           </p>
           <p className="mt-2 text-xs text-gray-400">
-            {t("arena.fileName", { file: councilRun.fileName, time: formatDateTime(councilRun.uploadedAt, locale) })}
+            {t("arena.fileName", { file: councilRun.fileName, time: formatDateTime(councilRun.uploadedAt, locale, t) })}
           </p>
         </div>
         <div className="grid w-full grid-cols-2 gap-3 sm:grid-cols-4 lg:w-[520px]">

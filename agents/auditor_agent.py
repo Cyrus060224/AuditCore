@@ -1,73 +1,23 @@
 # -*- coding: utf-8 -*-
 """
 初级审计 Agent 引擎。
-调用兼容 OpenAI 标准的大模型 API，对异常数据生成分析报告。
-支持 BYOK 多模型路由：Ollama / DeepSeek / OpenAI。
+继承 BaseLLMAgent，对异常数据生成审计分析报告。
 """
 
-from openai import OpenAI
+from __future__ import annotations
+
+from agents.base_agent import BaseLLMAgent
+from core.contracts import AgentResult
 
 
-class JuniorAuditorAgent:
+class JuniorAuditorAgent(BaseLLMAgent):
     """初级审计 Agent，负责将异常数据交由 LLM 生成审计意见。"""
 
     def __init__(self, lang: str = "English", api_key: str = "", api_base: str = ""):
-        """
-        初始化 LLM 客户端，由 app.py 侧边栏的路由配置驱动。
+        super().__init__(agent_id="junior_agent", lang=lang, api_key=api_key, api_base=api_base)
 
-        Args:
-            lang: 界面语言，"English" 或 "中文"，控制大模型输出语言。
-            api_key: 从 session_state 传入的 API Key（云端）或占位符（Ollama）。
-            api_base: 从 session_state 传入的目标接口地址。
-
-        Raises:
-            RuntimeError: API Key 为空时抛出。
-        """
-        self.lang = lang
-        self.api_key = api_key
-        self.api_base = api_base
-        self.model = "llama3:8b" if "localhost" in api_base else "gpt-4o-mini"
-
-        print("-" * 40)
-        print(f"[Junior Agent] 目标接口: {self.api_base}")
-        print(f"[Junior Agent] 使用模型: {self.model}")
-        print("-" * 40)
-
-        if not self.api_key:
-            raise RuntimeError("API Key is empty. Please configure it in the sidebar.")
-
-        self.client = OpenAI(api_key=self.api_key, base_url=self.api_base)
-
-    @staticmethod
-    def _format_anomalies(anomalies_dict: dict) -> str:
-        """
-        数据流转逻辑：将 Pandas 抓出的异常 DataFrame 字典，
-        降维转换成简单的纯文本格式，方便丢给大模型阅读。
-        """
-        lines = []
-        for label, df in anomalies_dict.items():
-            if df.empty:
-                continue
-            lines.append(f"## {label} ({len(df)} record(s))")
-            lines.append(df.to_string(index=False))
-            lines.append("")
-
-        return "\n".join(lines) if lines else "No anomalies found."
-
-    def generate_report(self, anomalies_dict: dict, stats: dict) -> str:
-        """
-        业务逻辑：组装 Prompt，向大模型发送请求并接收审计报告。
-
-        Args:
-            anomalies_dict: 异常分类字典。
-            stats: 统计指标字典。
-
-        Returns:
-            LLM 返回的 JSON 字符串。
-
-        Raises:
-            RuntimeError: API 调用失败时抛出。
-        """
+    def run(self, anomalies_dict: dict, stats: dict) -> AgentResult:
+        """执行初审分析，返回标准化 AgentResult。"""
         anomaly_text = self._format_anomalies(anomalies_dict)
         total_records = stats.get("total_records", "N/A")
         anomaly_count = stats.get("anomaly_count", "N/A")
@@ -95,20 +45,22 @@ class JuniorAuditorAgent:
             "Please provide your preliminary audit opinion as a valid JSON object."
         )
 
-        print(f"[Junior Agent] 正在向模型 '{self.model}' 发送请求...")
-
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.3,
-                max_tokens=1024,
-                response_format={"type": "json_object"},
+            raw = self._call_llm(system_prompt, user_prompt, temperature=0.3, max_tokens=1024)
+            output = self._parse_json_response(raw)
+            risk_score = output.get("risk_score", 50)
+            confidence = max(0.3, min(1.0, (100 - abs(risk_score - 50)) / 100))
+            return self._make_result(
+                status="success",
+                output=output,
+                evidence_node_ids=["junior_conclusion"],
+                confidence=confidence,
             )
-            print("[Junior Agent] 报告生成成功！")
-            return response.choices[0].message.content
         except Exception as e:
-            raise RuntimeError(f"Junior Agent API call failed: {e}")
+            return self._make_result(status="failed", output={"error": str(e)})
+
+    # 向后兼容旧接口
+    def generate_report(self, anomalies_dict: dict, stats: dict) -> str:
+        result = self.run(anomalies_dict, stats)
+        import json
+        return json.dumps(result.output)

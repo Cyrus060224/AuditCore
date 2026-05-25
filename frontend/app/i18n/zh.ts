@@ -100,6 +100,7 @@ export const zh = {
       low: "低风险",
       unidentified: "未识别"
     },
+    unknownTime: "未知时间",
     doc: {
       title: "审计工作底稿",
       section1: "1. 审计对象",
@@ -283,7 +284,16 @@ export const zh = {
       finalDecisionReasoningAnomalies: "多 Agent 根据你上传文件的规则命中结果完成仲裁：{finding}，最终风险分 {score}/100。",
       finalDecisionReasoningNoAnomalies: "多 Agent 根据你上传文件的扫描结果完成仲裁：当前异常证据不足，最终风险分 {score}/100。",
       finalDecisionActionAnomalies: "生成专项审计底稿，并向业务/财务团队发起凭证补证请求。",
-      finalDecisionActionNoAnomalies: "保留审计扫描记录，按常规流程归档。"
+      finalDecisionActionNoAnomalies: "保留审计扫描记录，按常规流程归档。",
+      unit: "条",
+      separator: "、",
+      ruleReview: "规则复核",
+      scanStats: "扫描统计",
+      privacyAnonymization: "展示层脱敏",
+      enabled: "已启用",
+      backendPipelineSummary: "基于后端多 Agent 流水线分析 {total} 条记录，一致性评分 {score}。",
+      multiAgentTitle: "多 Agent 协同虚拟审计组",
+      backendPipeline: "后端 Agent 流水线"
     }
   }
 };

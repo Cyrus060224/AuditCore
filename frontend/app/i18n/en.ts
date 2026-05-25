@@ -100,6 +100,7 @@ export const en = {
       low: "Low Risk",
       unidentified: "Unidentified"
     },
+    unknownTime: "Unknown Time",
     doc: {
       title: "Audit Working Papers",
       section1: "1. Audit Object",
@@ -283,7 +284,16 @@ export const en = {
       finalDecisionReasoningAnomalies: "Multi-agents completed arbitration based on rule hit results of your uploaded file: {finding}, final risk score {score}/100.",
       finalDecisionReasoningNoAnomalies: "Multi-agents completed arbitration based on scan results of your uploaded file: currently insufficient evidence of anomalies, final risk score {score}/100.",
       finalDecisionActionAnomalies: "Generate special working papers and initiate voucher supplement requests to the business/finance team.",
-      finalDecisionActionNoAnomalies: "Retain audit scan records, archiving according to standard flow."
+      finalDecisionActionNoAnomalies: "Retain audit scan records, archiving according to standard flow.",
+      unit: "records",
+      separator: ", ",
+      ruleReview: "Rule Review",
+      scanStats: "Scan Stats",
+      privacyAnonymization: "Presentation Layer Anonymization",
+      enabled: "Enabled",
+      backendPipelineSummary: "Backend multi-agent pipeline analyzed {total} records with consistency score {score}.",
+      multiAgentTitle: "Multi-Agent Collaborative Virtual Audit Group",
+      backendPipeline: "Backend Agent Pipeline"
     }
   }
 };
