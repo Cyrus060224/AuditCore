@@ -705,8 +705,8 @@ export default function AgentArena() {
                 ))}
               </div>
               <div className="space-y-3">
-                {councilRun.evidence.edges.map((edge) => (
-                  <EvidenceEdgeCard key={`${edge.source_id}-${edge.target_id}`} edge={edge} />
+                {councilRun.evidence.edges.map((edge, index) => (
+                  <EvidenceEdgeCard key={`${edge.source_id}-${edge.target_id}-${index}`} edge={edge} />
                 ))}
               </div>
             </div>
