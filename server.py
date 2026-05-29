@@ -9,9 +9,11 @@ import pandas as pd
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import uvicorn
 
 from core.contracts import AgentResult, AuditPipelineResult
+from core.model_registry import ModelRegistry, PROVIDER_PRESETS
 from core.orchestrator import AuditOrchestrator
 
 load_dotenv()
@@ -20,6 +22,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 AUDIT_LANG = os.getenv("AUDIT_LANG", "中文")
 CONSISTENCY_THRESHOLD = float(os.getenv("CONSISTENCY_THRESHOLD", "0.80"))
+
+# 构建模型注册表
+model_registry = ModelRegistry.from_env()
 
 latest_audit_run: dict[str, Any] | None = None
 latest_arena_data: dict[str, Any] | None = None
@@ -38,6 +43,63 @@ app.add_middleware(
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "service": "AuditCore API"}
+
+
+@app.get("/api/models")
+async def get_model_config():
+    """返回当前模型配置摘要（隐藏 API Key）+ 提供商预设列表。"""
+    return {
+        "config": model_registry.describe(),
+        "providerPresets": PROVIDER_PRESETS,
+    }
+
+
+class LLMConfigPayload(BaseModel):
+    provider: str = "openai"
+    api_key: str = ""
+    base_url: str = ""
+    model: str = ""
+
+
+class ModelUpdatePayload(BaseModel):
+    default: LLMConfigPayload
+    agents: dict[str, LLMConfigPayload] | None = None
+
+
+@app.put("/api/models")
+async def update_model_config(payload: ModelUpdatePayload):
+    """运行时更新模型配置。"""
+    global model_registry
+
+    from core.contracts import LLMConfig
+
+    preset = PROVIDER_PRESETS.get(payload.default.provider, PROVIDER_PRESETS["openai"])
+
+    default_config = LLMConfig(
+        provider=payload.default.provider,
+        api_key=payload.default.api_key,
+        base_url=payload.default.base_url or preset["base_url"],
+        model=payload.default.model or preset["model"],
+    )
+
+    agent_configs: dict[str, LLMConfig] = {}
+    if payload.agents:
+        for agent_id, agent_payload in payload.agents.items():
+            ap = agent_payload.provider or payload.default.provider
+            ap_preset = PROVIDER_PRESETS.get(ap, preset)
+            agent_configs[agent_id] = LLMConfig(
+                provider=ap,
+                api_key=agent_payload.api_key or payload.default.api_key,
+                base_url=agent_payload.base_url or ap_preset["base_url"],
+                model=agent_payload.model or ap_preset["model"],
+            )
+
+    model_registry = ModelRegistry(default_config=default_config, agent_configs=agent_configs)
+
+    return {
+        "status": "ok",
+        "config": model_registry.describe(),
+    }
 
 
 @app.get("/api/audit/latest")
@@ -78,7 +140,7 @@ async def run_audit(file: UploadFile = File(...)):
                 df = df.rename(columns={candidate: "Amount"})
             break
 
-    if not OPENAI_API_KEY:
+    if not model_registry.default_config.api_key:
         return _run_fallback_rule_only(df, file.filename)
 
     try:
@@ -87,6 +149,7 @@ async def run_audit(file: UploadFile = File(...)):
             api_base=OPENAI_BASE_URL,
             lang=AUDIT_LANG,
             threshold=CONSISTENCY_THRESHOLD,
+            model_registry=model_registry,
         )
         result: AuditPipelineResult = orchestrator.run_pipeline(df)
     except Exception as e:

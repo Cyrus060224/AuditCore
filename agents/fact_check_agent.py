@@ -7,14 +7,14 @@
 from __future__ import annotations
 
 from agents.base_agent import BaseLLMAgent
-from core.contracts import AgentResult, EvidenceEdge, EvidenceNode
+from core.contracts import AgentResult, EvidenceEdge, EvidenceNode, LLMConfig
 
 
 class FactCheckAgent(BaseLLMAgent):
     """事实核查 Agent，验证证据支撑度并输出一致性评分。"""
 
-    def __init__(self, lang: str = "English", api_key: str = "", api_base: str = ""):
-        super().__init__(agent_id="fact_check_agent", lang=lang, api_key=api_key, api_base=api_base)
+    def __init__(self, lang: str = "English", api_key: str = "", api_base: str = "", config: LLMConfig | None = None):
+        super().__init__(agent_id="fact_check_agent", lang=lang, api_key=api_key, api_base=api_base, config=config)
 
     def run(
         self,

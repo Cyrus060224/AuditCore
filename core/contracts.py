@@ -11,6 +11,27 @@ from enum import Enum
 from typing import Any
 
 
+# ── LLM 模型配置契约 ──
+
+
+@dataclass
+class LLMConfig:
+    """
+    单个 LLM 调用的完整配置。
+
+    provider:
+        - "openai"    : 兼容 OpenAI API 格式的所有服务（OpenAI、DeepSeek、Moonshot、Ollama 等）
+        - "anthropic" : Anthropic Claude API
+    """
+
+    provider: str = "openai"
+    api_key: str = ""
+    base_url: str = "https://api.openai.com/v1"
+    model: str = "gpt-4o-mini"
+    temperature: float = 0.3
+    max_tokens: int = 1024
+
+
 def _clamp_unit_score(value: Any, default: float) -> float:
     """
     将输入值收敛到 0-1 区间，避免上游 JSON 漂移直接污染状态层。

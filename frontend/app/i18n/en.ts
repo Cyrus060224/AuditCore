@@ -2,7 +2,8 @@ export const en = {
   nav: {
     console: "Console",
     arena: "Agent Arena",
-    papers: "Working Papers"
+    papers: "Working Papers",
+    settings: "Model Config"
   },
   layout: {
     title: "AuditCore",
@@ -295,5 +296,31 @@ export const en = {
       multiAgentTitle: "Multi-Agent Collaborative Virtual Audit Group",
       backendPipeline: "Backend Agent Pipeline"
     }
+  },
+  settings: {
+    back: "Back to Console",
+    title: "Model Configuration",
+    subtitle: "Configure the LLM provider and model for the audit pipeline. Supports local models and various cloud APIs.",
+    defaultTitle: "Default Model",
+    defaultDesc: "All agents use this configuration by default, unless individually overridden.",
+    provider: "Provider",
+    apiKey: "API Key",
+    baseUrl: "Base URL",
+    model: "Model Name",
+    agentOverride: "Per-Agent Override (Optional)",
+    agentOverrideDesc: "Specify independent model configs for specific agents. Unconfigured agents will use the global default.",
+    agentJunior: "Junior Auditor",
+    agentChallenger: "Challenger",
+    agentFactCheck: "Fact Checker",
+    agentSenior: "Senior Partner",
+    save: "Save Configuration",
+    saving: "Saving...",
+    saved: "Configuration Saved",
+    saveFailed: "Save Failed",
+    reset: "Reset",
+    custom: "Custom",
+    apiKeyPlaceholder: "Enter API Key",
+    baseUrlPlaceholder: "Enter Base URL",
+    modelPlaceholder: "Enter Model Name"
   }
 };

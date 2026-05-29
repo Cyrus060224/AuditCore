@@ -26,7 +26,9 @@ from core.contracts import (
     EvidenceEdge,
     EvidenceNode,
     FactCheckResult,
+    LLMConfig,
 )
+from core.model_registry import ModelRegistry
 from core.evidence_graph import EvidenceGraph
 from core.privacy_layer import PrivacyLayer
 from core.state_machine import (
@@ -58,13 +60,28 @@ class AuditOrchestrator:
         lang: str = "English",
         threshold: float = 0.80,
         max_iterations: int = 3,
+        model_registry: ModelRegistry | None = None,
     ) -> None:
         self.lang = lang
+
+        # 若未传入 registry，用旧参数构造一个（向后兼容）
+        if model_registry is None:
+            default_cfg = LLMConfig(api_key=api_key, base_url=api_base)
+            model_registry = ModelRegistry(default_config=default_cfg)
+
         self.rule_agent = RuleAgent()
-        self.junior_agent = JuniorAuditorAgent(lang=lang, api_key=api_key, api_base=api_base)
-        self.challenger_agent = ChallengerAgent(lang=lang, api_key=api_key, api_base=api_base)
-        self.fact_check_agent = FactCheckAgent(lang=lang, api_key=api_key, api_base=api_base)
-        self.senior_partner_agent = SeniorPartnerAgent(lang=lang, api_key=api_key, api_base=api_base)
+        self.junior_agent = JuniorAuditorAgent(
+            lang=lang, config=model_registry.get_config("junior"),
+        )
+        self.challenger_agent = ChallengerAgent(
+            lang=lang, config=model_registry.get_config("challenger"),
+        )
+        self.fact_check_agent = FactCheckAgent(
+            lang=lang, config=model_registry.get_config("factcheck"),
+        )
+        self.senior_partner_agent = SeniorPartnerAgent(
+            lang=lang, config=model_registry.get_config("senior"),
+        )
         self.privacy_layer = PrivacyLayer()
         self.graph = EvidenceGraph()
         self.state_machine = DAGStateMachine(threshold=threshold, max_iterations=max_iterations)

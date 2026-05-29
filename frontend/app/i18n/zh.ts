@@ -2,7 +2,8 @@ export const zh = {
   nav: {
     console: "控制台",
     arena: "虚拟审计组",
-    papers: "审计工作底稿"
+    papers: "审计工作底稿",
+    settings: "模型配置"
   },
   layout: {
     title: "Enterprise Penetration Audit System", // keeps branding
@@ -295,5 +296,31 @@ export const zh = {
       multiAgentTitle: "多 Agent 协同虚拟审计组",
       backendPipeline: "后端 Agent 流水线"
     }
+  },
+  settings: {
+    back: "返回控制台",
+    title: "模型配置",
+    subtitle: "配置审计流水线使用的 LLM 提供商和模型。支持本地部署模型和多种云端 API。",
+    defaultTitle: "全局默认模型",
+    defaultDesc: "所有 Agent 默认使用此配置，除非单独覆盖。",
+    provider: "提供商",
+    apiKey: "API Key",
+    baseUrl: "Base URL",
+    model: "模型名称",
+    agentOverride: "按 Agent 覆盖（可选）",
+    agentOverrideDesc: "为特定 Agent 指定独立的模型配置。未配置的 Agent 将使用全局默认。",
+    agentJunior: "初级审计",
+    agentChallenger: "挑战者",
+    agentFactCheck: "事实核查",
+    agentSenior: "高级合伙人",
+    save: "保存配置",
+    saving: "保存中...",
+    saved: "配置已保存",
+    saveFailed: "保存失败",
+    reset: "重置",
+    custom: "自定义",
+    apiKeyPlaceholder: "输入 API Key",
+    baseUrlPlaceholder: "输入 Base URL",
+    modelPlaceholder: "输入模型名称"
   }
 };

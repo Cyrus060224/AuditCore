@@ -7,14 +7,14 @@
 from __future__ import annotations
 
 from agents.base_agent import BaseLLMAgent
-from core.contracts import AgentResult
+from core.contracts import AgentResult, LLMConfig
 
 
 class SeniorPartnerAgent(BaseLLMAgent):
     """高级合伙人 Agent，综合两方意见做出最终裁决。"""
 
-    def __init__(self, lang: str = "English", api_key: str = "", api_base: str = ""):
-        super().__init__(agent_id="senior_partner_agent", lang=lang, api_key=api_key, api_base=api_base)
+    def __init__(self, lang: str = "English", api_key: str = "", api_base: str = "", config: LLMConfig | None = None):
+        super().__init__(agent_id="senior_partner_agent", lang=lang, api_key=api_key, api_base=api_base, config=config)
 
     def run(
         self,

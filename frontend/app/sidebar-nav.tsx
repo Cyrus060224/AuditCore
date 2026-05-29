@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, FileText, LayoutDashboard } from "lucide-react";
+import { Bot, FileText, LayoutDashboard, Settings } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTranslation } from "./i18n";
@@ -9,6 +9,7 @@ const navItems = [
   { href: "/", translationKey: "nav.console", icon: LayoutDashboard },
   { href: "/arena", translationKey: "nav.arena", icon: Bot },
   { href: "/papers", translationKey: "nav.papers", icon: FileText },
+  { href: "/settings", translationKey: "nav.settings", icon: Settings },
 ];
 
 export default function SidebarNav() {

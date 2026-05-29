@@ -7,14 +7,14 @@
 from __future__ import annotations
 
 from agents.base_agent import BaseLLMAgent
-from core.contracts import AgentResult
+from core.contracts import AgentResult, LLMConfig
 
 
 class JuniorAuditorAgent(BaseLLMAgent):
     """初级审计 Agent，负责将异常数据交由 LLM 生成审计意见。"""
 
-    def __init__(self, lang: str = "English", api_key: str = "", api_base: str = ""):
-        super().__init__(agent_id="junior_agent", lang=lang, api_key=api_key, api_base=api_base)
+    def __init__(self, lang: str = "English", api_key: str = "", api_base: str = "", config: LLMConfig | None = None):
+        super().__init__(agent_id="junior_agent", lang=lang, api_key=api_key, api_base=api_base, config=config)
 
     def run(self, anomalies_dict: dict, stats: dict) -> AgentResult:
         """执行初审分析，返回标准化 AgentResult。"""
